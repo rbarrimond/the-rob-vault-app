@@ -27,6 +27,9 @@ TABLE_NAME = "VaultSessions"
 
 app = FunctionApp()
 
+# ----------------------
+# Helper Functions
+# ----------------------
 def get_manifest(headers):
     """
     Fetches and caches the Destiny 2 manifest definitions from Bungie API.
@@ -35,13 +38,16 @@ def get_manifest(headers):
     if "definitions" in manifest_cache:
         return manifest_cache["definitions"]
 
-    index_resp = requests.get(f"{BUNGIE_API_BASE}/Destiny2/Manifest/", headers=headers, timeout=REQUEST_TIMEOUT)
+    index_resp = requests.get(
+        f"{BUNGIE_API_BASE}/Destiny2/Manifest/", headers=headers, timeout=REQUEST_TIMEOUT)
     if not index_resp.ok:
-        logging.error("Failed to fetch manifest index: status %d", index_resp.status_code)
+        logging.error("Failed to fetch manifest index: status %d",
+                      index_resp.status_code)
         return {}
 
     index_data = index_resp.json().get("Response", {})
-    en_content_path = index_data.get("jsonWorldComponentContentPaths", {}).get("en", {}).get("DestinyInventoryItemDefinition")
+    en_content_path = index_data.get("jsonWorldComponentContentPaths", {}).get(
+        "en", {}).get("DestinyInventoryItemDefinition")
     if not en_content_path:
         logging.error("Manifest path not found in manifest index response")
         return {}
@@ -49,13 +55,69 @@ def get_manifest(headers):
     manifest_url = f"https://www.bungie.net{en_content_path}"
     manifest_resp = requests.get(manifest_url, timeout=REQUEST_TIMEOUT)
     if not manifest_resp.ok:
-        logging.error("Failed to fetch manifest content: status %d", manifest_resp.status_code)
+        logging.error("Failed to fetch manifest content: status %d",
+                      manifest_resp.status_code)
         return {}
 
     definitions = manifest_resp.json()
     manifest_cache["definitions"] = definitions
     return definitions
 
+
+def save_vault_blob(membership_id, data):
+    """
+    Saves full vault data to Azure Blob Storage for the given membership_id.
+    Overwrites any existing blob with the same name.
+    """
+    try:
+        blob_service = BlobServiceClient.from_connection_string(
+            STORAGE_CONNECTION_STRING)
+        container = blob_service.get_container_client(BLOB_CONTAINER)
+        # Ensure container exists
+        try:
+            container.create_container()
+        except ResourceExistsError:
+            pass  # Container may already exist
+        blob_name = f"{membership_id}.json"
+        container.upload_blob(blob_name, data=json.dumps(data), overwrite=True)
+        logging.info("Vault data saved to blob: %s/%s",
+                     BLOB_CONTAINER, blob_name)
+    except Exception as e:
+        logging.error("Failed to save vault data to blob: %s", e)
+        raise
+
+
+def store_session_metadata(membership_id, membership_type, character_summary):
+    """
+    Stores session metadata in Azure Table Storage for the given membership_id.
+    Upserts the entity with membership_type and character IDs.
+    """
+    try:
+        table_service = TableServiceClient.from_connection_string(
+            STORAGE_CONNECTION_STRING)
+        table_client = table_service.get_table_client(TABLE_NAME)
+        # Ensure table exists
+        try:
+            table_client.create_table()
+        except ResourceExistsError:
+            pass  # Table may already exist
+        entity = {
+            "PartitionKey": "VaultSession",
+            "RowKey": membership_id,
+            "membershipType": membership_type,
+            "characterIds": json.dumps(list(character_summary.keys()))
+        }
+        table_client.upsert_entity(entity=entity)
+        logging.info(
+            "Session metadata stored in table: %s, RowKey: %s", TABLE_NAME, membership_id)
+    except Exception as e:
+        logging.error("Failed to store session metadata: %s", e)
+        raise
+
+
+# ----------------------
+# Route Handler Functions
+# ----------------------
 @app.route(route="/assistant/init", methods=["POST"])
 def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
     """
@@ -75,7 +137,8 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
 
     # Membership lookup
     profile_url = f"{BUNGIE_API_BASE}/User/GetMembershipsForCurrentUser/"
-    profile_resp = requests.get(profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    profile_resp = requests.get(
+        profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not profile_resp.ok:
         return func.HttpResponse("Failed to get membership", status_code=profile_resp.status_code)
 
@@ -91,7 +154,8 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
 
     # Get character list
     characters_url = f"{BUNGIE_API_BASE}/Destiny2/{membership_type}/Profile/{membership_id}/?components=200"
-    char_resp = requests.get(characters_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    char_resp = requests.get(
+        characters_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not char_resp.ok:
         return func.HttpResponse("Failed to get characters", status_code=char_resp.status_code)
 
@@ -113,6 +177,7 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
     }
 
     return func.HttpResponse(json.dumps(response, indent=2), mimetype="application/json")
+
 
 @app.route(route="/", methods=["POST"])
 def main(req: func.HttpRequest) -> func.HttpResponse:
@@ -138,7 +203,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "X-API-Key": API_KEY
         }
         profile_url = f"{BUNGIE_API_BASE}/User/GetMembershipsForCurrentUser/"
-        profile_resp = requests.get(profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
+        profile_resp = requests.get(
+            profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
         if not profile_resp.ok:
             return func.HttpResponse("Failed to get membership data", status_code=profile_resp.status_code)
         profile_data = profile_resp.json().get("Response", {})
@@ -165,6 +231,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json"
     )
 
+
 @app.route(route="/auth", methods=["GET"])
 def auth(req: func.HttpRequest) -> func.HttpResponse:
     """
@@ -184,7 +251,8 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     try:
-        response = requests.post(token_url, data=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+        response = requests.post(
+            token_url, data=payload, headers=headers, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         token_data = response.json()
     except requests.RequestException as e:
@@ -192,7 +260,8 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("OAuth token exchange failed.", status_code=500)
     # Save token info to Azure Table Storage
     try:
-        table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        table_service = TableServiceClient.from_connection_string(
+            STORAGE_CONNECTION_STRING)
         table_client = table_service.get_table_client(TABLE_NAME)
         try:
             table_client.create_table()
@@ -238,6 +307,7 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     """
     return func.HttpResponse(html_content, mimetype="text/html")
 
+
 @app.route(route="/vault", methods=["POST"])
 def vault(req: func.HttpRequest) -> func.HttpResponse:
     """
@@ -250,19 +320,24 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
 
     if not access_token:
         try:
-            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_service = TableServiceClient.from_connection_string(
+                STORAGE_CONNECTION_STRING)
             table_client = table_service.get_table_client(TABLE_NAME)
-            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
-            access_token = entity["accessToken"]
+            entity = table_client.get_entity(
+                partition_key="AuthSession", row_key="last")
+            access_token = entity.get("accessToken")
+            if not access_token:
+                return func.HttpResponse("No cached access_token available. Please authenticate.", status_code=403)
         except Exception as e:
             logging.error("Token retrieval from table failed: %s", e)
-            return func.HttpResponse("Missing access_token and failed to retrieve from table.", status_code=401)
+            return func.HttpResponse("No cached access_token available. Please authenticate.", status_code=403)
     headers = {
         "Authorization": f"Bearer {access_token}",
         "X-API-Key": API_KEY
     }
     profile_url = f"{BUNGIE_API_BASE}/User/GetMembershipsForCurrentUser/"
-    profile_resp = requests.get(profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    profile_resp = requests.get(
+        profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not profile_resp.ok:
         return func.HttpResponse("Failed to get membership", status_code=profile_resp.status_code)
     profile_data = profile_resp.json()["Response"]
@@ -270,11 +345,14 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
     membership_id = membership["membershipId"]
     membership_type = membership["membershipType"]
     inventory_url = f"{BUNGIE_API_BASE}/Destiny2/{membership_type}/Profile/{membership_id}/?components=102"
-    inv_resp = requests.get(inventory_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    inv_resp = requests.get(
+        inventory_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not inv_resp.ok:
         return func.HttpResponse("Failed to get vault inventory", status_code=inv_resp.status_code)
-    inventory = inv_resp.json()["Response"]["profileInventory"]["data"]["items"]
+    inventory = inv_resp.json(
+    )["Response"]["profileInventory"]["data"]["items"]
     return func.HttpResponse(json.dumps(inventory, indent=2), mimetype="application/json")
+
 
 @app.route(route="/characters", methods=["POST"])
 def characters(req: func.HttpRequest) -> func.HttpResponse:
@@ -288,19 +366,24 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
 
     if not access_token:
         try:
-            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_service = TableServiceClient.from_connection_string(
+                STORAGE_CONNECTION_STRING)
             table_client = table_service.get_table_client(TABLE_NAME)
-            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
-            access_token = entity["accessToken"]
+            entity = table_client.get_entity(
+                partition_key="AuthSession", row_key="last")
+            access_token = entity.get("accessToken")
+            if not access_token:
+                return func.HttpResponse("No cached access_token available. Please authenticate.", status_code=403)
         except Exception as e:
             logging.error("Token retrieval from table failed: %s", e)
-            return func.HttpResponse("Missing access_token and failed to retrieve from table.", status_code=401)
+            return func.HttpResponse("No cached access_token available. Please authenticate.", status_code=403)
     headers = {
         "Authorization": f"Bearer {access_token}",
         "X-API-Key": API_KEY
     }
     profile_url = f"{BUNGIE_API_BASE}/User/GetMembershipsForCurrentUser/"
-    profile_resp = requests.get(profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    profile_resp = requests.get(
+        profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not profile_resp.ok:
         return func.HttpResponse("Failed to get membership", status_code=profile_resp.status_code)
     profile_data = profile_resp.json()["Response"]
@@ -308,11 +391,13 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     membership_id = membership["membershipId"]
     membership_type = membership["membershipType"]
     char_url = f"{BUNGIE_API_BASE}/Destiny2/{membership_type}/Profile/{membership_id}/?components=205"
-    char_resp = requests.get(char_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    char_resp = requests.get(char_url, headers=headers,
+                             timeout=REQUEST_TIMEOUT)
     if not char_resp.ok:
         return func.HttpResponse("Failed to get character equipment", status_code=char_resp.status_code)
     equipment = char_resp.json()["Response"]["characterEquipment"]["data"]
     return func.HttpResponse(json.dumps(equipment, indent=2), mimetype="application/json")
+
 
 @app.route(route="/manifest/item", methods=["GET"])
 def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
@@ -332,65 +417,24 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(definition, indent=2), mimetype="application/json")
 
 
-def save_vault_blob(membership_id, data):
-    """
-    Saves full vault data to Azure Blob Storage for the given membership_id.
-    Overwrites any existing blob with the same name.
-    """
-    try:
-        blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
-        container = blob_service.get_container_client(BLOB_CONTAINER)
-        # Ensure container exists
-        try:
-            container.create_container()
-        except ResourceExistsError:
-            pass  # Container may already exist
-        blob_name = f"{membership_id}.json"
-        container.upload_blob(blob_name, data=json.dumps(data), overwrite=True)
-        logging.info("Vault data saved to blob: %s/%s", BLOB_CONTAINER, blob_name)
-    except Exception as e:
-        logging.error("Failed to save vault data to blob: %s", e)
-        raise
-
-
-def store_session_metadata(membership_id, membership_type, character_summary):
-    """
-    Stores session metadata in Azure Table Storage for the given membership_id.
-    Upserts the entity with membership_type and character IDs.
-    """
-    try:
-        table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
-        table_client = table_service.get_table_client(TABLE_NAME)
-        # Ensure table exists
-        try:
-            table_client.create_table()
-        except ResourceExistsError:
-            pass  # Table may already exist
-        entity = {
-            "PartitionKey": "VaultSession",
-            "RowKey": membership_id,
-            "membershipType": membership_type,
-            "characterIds": json.dumps(list(character_summary.keys()))
-        }
-        table_client.upsert_entity(entity=entity)
-        logging.info("Session metadata stored in table: %s, RowKey: %s", TABLE_NAME, membership_id)
-    except Exception as e:
-        logging.error("Failed to store session metadata: %s", e)
-        raise
-
 @app.route(route="/token", methods=["GET"])
 def token(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns a valid access token from table storage, refreshing it with the refresh token if needed.
     """
     try:
-        table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        table_service = TableServiceClient.from_connection_string(
+            STORAGE_CONNECTION_STRING)
         table_client = table_service.get_table_client(TABLE_NAME)
-        entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
-
-        access_token = entity["accessToken"]
-        return func.HttpResponse(json.dumps({"access_token": access_token}), mimetype="application/json")
-
+        try:
+            entity = table_client.get_entity(
+                partition_key="AuthSession", row_key="last")
+            access_token = entity.get("accessToken")
+            if not access_token:
+                return func.HttpResponse("No valid session found. Please re-authenticate via /auth.", status_code=403)
+            return func.HttpResponse(json.dumps({"access_token": access_token}), mimetype="application/json")
+        except Exception:
+            return func.HttpResponse("No valid session found. Please re-authenticate via /auth.", status_code=403)
     except Exception as e:
         logging.error("Token fetch failed: %s", e)
         return func.HttpResponse("Failed to fetch token.", status_code=500)
