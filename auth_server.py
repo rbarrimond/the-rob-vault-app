@@ -1,15 +1,12 @@
-'''
-A simple Flask app to handle Bungie OAuth authentication.
-# bungie_oauth.py'''
-
+import os
 import json
 import requests
 from flask import Flask, request, redirect
 
-# Replace with your actual Bungie app values
-CLIENT_ID = "35650"
-CLIENT_SECRET = "81db95d78e324528b98c4e0127b874be"
-REDIRECT_URI = "http://localhost:5000/auth"
+# Read sensitive values from environment variables
+CLIENT_ID = os.environ.get("BUNGIE_CLIENT_ID", "")
+CLIENT_SECRET = os.environ.get("BUNGIE_CLIENT_SECRET", "")
+REDIRECT_URI = os.environ.get("BUNGIE_REDIRECT_URI", "")
 
 app = Flask(__name__)
 
@@ -34,10 +31,11 @@ def auth():
     res = requests.post(token_url, data=payload, headers=headers)
     data = res.json()
 
-    with open("tokens.json", "w") as f:
-        json.dump(data, f, indent=2)
+    # For demo: print token data (do not use print in production)
+    print(json.dumps(data, indent=2))
 
-    return "✅ Auth successful. Access token saved to tokens.json"
+    return "✅ Auth successful. Access token received."
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
