@@ -118,7 +118,7 @@ def store_session_metadata(membership_id, membership_type, character_summary):
 # ----------------------
 # Route Handler Functions
 # ----------------------
-@app.route(route="/assistant/init", methods=["POST"])
+@app.route(route="assistant/init", methods=["POST"])
 def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
     """
     Initializes the assistant by authenticating the user and fetching their Destiny 2 character summary.
@@ -179,7 +179,7 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(response, indent=2), mimetype="application/json")
 
 
-@app.route(route="/", methods=["POST"])
+@app.route(route="", methods=["POST"])
 def main(req: func.HttpRequest) -> func.HttpResponse:
     """
     Main entry point for the Vault assistant. Accepts either an access_token or a vault_data_path.
@@ -232,7 +232,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
-@app.route(route="/auth", methods=["GET"])
+@app.route(route="auth", methods=["GET"])
 def auth(req: func.HttpRequest) -> func.HttpResponse:
     """
     Handles Bungie OAuth callback and exchanges code for access and refresh tokens.
@@ -308,7 +308,7 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(html_content, mimetype="text/html")
 
 
-@app.route(route="/vault", methods=["POST"])
+@app.route(route="vault", methods=["POST"])
 def vault(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the user's Destiny 2 vault inventory items.
@@ -354,7 +354,7 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(inventory, indent=2), mimetype="application/json")
 
 
-@app.route(route="/characters", methods=["POST"])
+@app.route(route="characters", methods=["POST"])
 def characters(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the user's Destiny 2 character equipment data.
@@ -399,7 +399,7 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(equipment, indent=2), mimetype="application/json")
 
 
-@app.route(route="/manifest/item", methods=["GET"])
+@app.route(route="manifest/item", methods=["GET"])
 def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the manifest definition for a given item hash.
@@ -417,7 +417,7 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(definition, indent=2), mimetype="application/json")
 
 
-@app.route(route="/token", methods=["GET"])
+@app.route(route="token", methods=["GET"])
 def token(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns a valid access token from table storage, refreshing it with the refresh token if needed.
