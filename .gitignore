@@ -16,7 +16,6 @@ __pycache__/
 .ipynb_checkpoints/
 
 # VS Code settings
-.vscode/
 
 # OS generated files
 Thumbs.db
@@ -41,4 +40,5 @@ local.settings.json
 bin/
 obj/
 # VS Code Azure Functions extension settings
-.vscode/
+
+.python_packages
