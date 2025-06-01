@@ -190,11 +190,53 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     except requests.RequestException as e:
         logging.error("Token exchange failed: %s", e)
         return func.HttpResponse("OAuth token exchange failed.", status_code=500)
-    return func.HttpResponse(
-        json.dumps(token_data, indent=2),
-        status_code=200,
-        mimetype="application/json"
-    )
+    # Save token info to Azure Table Storage
+    try:
+        table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        table_client = table_service.get_table_client(TABLE_NAME)
+        try:
+            table_client.create_table()
+        except ResourceExistsError:
+            pass  # Table may already exist
+        token_entity = {
+            "PartitionKey": "AuthSession",
+            "RowKey": token_data["membership_id"] if "membership_id" in token_data else "last",
+            "accessToken": token_data["access_token"],
+            "refreshToken": token_data["refresh_token"],
+            "expiresIn": token_data["expires_in"],
+        }
+        table_client.upsert_entity(entity=token_entity)
+        logging.info("Token data stored in table storage for session.")
+    except Exception as e:
+        logging.error("Failed to store token data: %s", e)
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Authorization Complete</title>
+        <script>
+            async function sendToken() {{
+                const response = await fetch('/api/assistant/init', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json'
+                    }},
+                    body: JSON.stringify({{ access_token: "{token_data['access_token']}" }})
+                }});
+                const result = await response.text();
+                document.getElementById('result').textContent = result;
+            }}
+            window.onload = sendToken;
+        </script>
+    </head>
+    <body>
+        <h1>Authorization Complete</h1>
+        <p>Initializing assistant…</p>
+        <pre id="result">Please wait...</pre>
+    </body>
+    </html>
+    """
+    return func.HttpResponse(html_content, mimetype="text/html")
 
 @app.route(route="/vault", methods=["POST"])
 def vault(req: func.HttpRequest) -> func.HttpResponse:
@@ -203,10 +245,18 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
     """
     try:
         access_token = req.get_json().get("access_token")
-        if not access_token:
-            return func.HttpResponse("Missing access_token", status_code=400)
     except ValueError:
         return func.HttpResponse("Invalid JSON body", status_code=400)
+
+    if not access_token:
+        try:
+            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_client = table_service.get_table_client(TABLE_NAME)
+            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            access_token = entity["accessToken"]
+        except Exception as e:
+            logging.error("Token retrieval from table failed: %s", e)
+            return func.HttpResponse("Missing access_token and failed to retrieve from table.", status_code=401)
     headers = {
         "Authorization": f"Bearer {access_token}",
         "X-API-Key": API_KEY
@@ -233,10 +283,18 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     """
     try:
         access_token = req.get_json().get("access_token")
-        if not access_token:
-            return func.HttpResponse("Missing access_token", status_code=400)
     except ValueError:
         return func.HttpResponse("Invalid JSON body", status_code=400)
+
+    if not access_token:
+        try:
+            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_client = table_service.get_table_client(TABLE_NAME)
+            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            access_token = entity["accessToken"]
+        except Exception as e:
+            logging.error("Token retrieval from table failed: %s", e)
+            return func.HttpResponse("Missing access_token and failed to retrieve from table.", status_code=401)
     headers = {
         "Authorization": f"Bearer {access_token}",
         "X-API-Key": API_KEY
@@ -319,4 +377,20 @@ def store_session_metadata(membership_id, membership_type, character_summary):
     except Exception as e:
         logging.error("Failed to store session metadata: %s", e)
         raise
-    
+
+@app.route(route="/token", methods=["GET"])
+def token(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Returns a valid access token from table storage, refreshing it with the refresh token if needed.
+    """
+    try:
+        table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        table_client = table_service.get_table_client(TABLE_NAME)
+        entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+
+        access_token = entity["accessToken"]
+        return func.HttpResponse(json.dumps({"access_token": access_token}), mimetype="application/json")
+
+    except Exception as e:
+        logging.error("Token fetch failed: %s", e)
+        return func.HttpResponse("Failed to fetch token.", status_code=500)
