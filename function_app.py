@@ -319,3 +319,4 @@ def store_session_metadata(membership_id, membership_type, character_summary):
     except Exception as e:
         logging.error("Failed to store session metadata: %s", e)
         raise
+    
