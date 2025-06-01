@@ -2,6 +2,8 @@ import os
 import json
 import requests
 from flask import Flask, request, redirect
+import azure.functions as func
+import logging
 
 # Read sensitive values from environment variables
 CLIENT_ID = os.environ.get("BUNGIE_CLIENT_ID", "")
@@ -9,6 +11,7 @@ CLIENT_SECRET = os.environ.get("BUNGIE_CLIENT_SECRET", "")
 REDIRECT_URI = os.environ.get("BUNGIE_REDIRECT_URI", "")
 
 app = Flask(__name__)
+func_app = func.FunctionApp()
 
 @app.route("/")
 def home():
@@ -35,6 +38,15 @@ def auth():
     print(json.dumps(data, indent=2))
 
     return "✅ Auth successful. Access token received."
+
+# Add Azure Function entry point for HTTP trigger
+@app.route(route="/")
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("Python HTTP trigger function processed a request.")
+    return func.HttpResponse(
+        "Hello from The R.oB. Vault Azure Function!",
+        status_code=200
+    )
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

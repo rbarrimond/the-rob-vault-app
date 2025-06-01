@@ -4,3 +4,4 @@ pandas
 numpy
 sqlalchemy
 python-dotenv
+azure-functions

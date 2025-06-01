@@ -34,3 +34,11 @@ tokens.json
 # Miscellaneous
 *.swp
 *.swo
+
+# Azure Functions local settings
+local.settings.json
+# Azure Functions build artifacts
+bin/
+obj/
+# VS Code Azure Functions extension settings
+.vscode/
