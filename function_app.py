@@ -5,12 +5,14 @@ This module provides HTTP-triggered Azure Functions for initializing the assista
 fetching Destiny 2 vault and character data, and accessing manifest items from the Bungie API.
 """
 
-# (insert at the top with other imports)
 import os
 import json
 import logging
-import requests
 import time
+import datetime
+import hashlib
+import requests
+
 import azure.functions as func
 from azure.functions.decorators import FunctionApp
 from azure.data.tables import TableServiceClient
@@ -37,6 +39,7 @@ app = FunctionApp()
 # ----------------------
 # Helper Functions
 # ----------------------
+
 def retry_request(method, url, **kwargs):
     """
     Retry logic for Bungie API requests with exponential backoff.
@@ -56,6 +59,8 @@ def retry_request(method, url, **kwargs):
             delay *= 2
     logging.error("Max retries exceeded for request: %s", url)
     raise Exception(f"Request failed after {tries} attempts: {url}")
+
+
 def get_manifest(headers):
     """
     Fetches and caches the Destiny 2 manifest definitions from Bungie API.
@@ -149,9 +154,45 @@ def store_session_metadata(membership_id, membership_type, character_summary):
         raise
 
 
+def compute_hash(content):
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def save_dim_backup_blob(membership_id, dim_json_str):
+    try:
+        blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        container = blob_service.get_container_client("dim-backups")
+        try:
+            container.create_container()
+        except ResourceExistsError:
+            pass
+        timestamp = datetime.datetime.utcnow().isoformat()
+        blob_name = f"dim-backup-{membership_id}-{timestamp}.json"
+        container.upload_blob(blob_name, dim_json_str, overwrite=True)
+
+        hash_key = compute_hash(dim_json_str)
+        table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        table_client = table_service.get_table_client(TABLE_NAME)
+        try:
+            table_client.create_table()
+        except ResourceExistsError:
+            pass
+        metadata = {
+            "PartitionKey": "DimBackup",
+            "RowKey": hash_key,
+            "membershipId": membership_id,
+            "timestamp": timestamp
+        }
+        table_client.upsert_entity(metadata)
+        logging.info("DIM backup saved and metadata stored.")
+    except Exception as e:
+        logging.error("Failed to save DIM backup: %s", e)
+        raise
+
 # ----------------------
 # Route Handler Functions
 # ----------------------
+
 @app.route(route="assistant/init", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
     """
@@ -389,6 +430,7 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to get vault inventory", status_code=inv_resp.status_code)
     inventory = inv_resp.json(
     )["Response"]["profileInventory"]["data"]["items"]
+    save_vault_blob(membership_id, inventory)
     logging.info("[vault] Responding with vault inventory data.")
     return func.HttpResponse(json.dumps(inventory, indent=2), mimetype="application/json")
 
@@ -436,6 +478,7 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     if not char_resp.ok:
         return func.HttpResponse("Failed to get character equipment", status_code=char_resp.status_code)
     equipment = char_resp.json()["Response"]["characterEquipment"]["data"]
+    save_vault_blob(membership_id + "-characters", equipment)
     logging.info("[characters] Responding with character equipment data.")
     return func.HttpResponse(json.dumps(equipment, indent=2), mimetype="application/json")
 
@@ -483,3 +526,22 @@ def token(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error("Token fetch failed: %s", e)
         return func.HttpResponse("Failed to fetch token.", status_code=500)
+
+
+@app.route(route="dim/backup", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Uploads a DIM backup and stores it in blob storage with metadata.
+    """
+    logging.info("[dim/backup] POST request received.")
+    try:
+        body = req.get_json()
+        membership_id = body.get("membership_id")
+        dim_backup = body.get("dim_backup")
+        if not membership_id or not dim_backup:
+            return func.HttpResponse("Missing membership_id or dim_backup", status_code=400)
+        save_dim_backup_blob(membership_id, dim_backup)
+        return func.HttpResponse("DIM backup saved successfully.", status_code=200)
+    except Exception as e:
+        logging.error("[dim/backup] Error: %s", e)
+        return func.HttpResponse("Failed to save DIM backup", status_code=500)
