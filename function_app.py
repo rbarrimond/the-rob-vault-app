@@ -124,11 +124,12 @@ def store_session_metadata(membership_id, membership_type, character_summary):
 # ----------------------
 # Route Handler Functions
 # ----------------------
-@app.route(route="assistant/init", methods=["POST"])
+@app.route(route="assistant/init", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
     """
     Initializes the assistant by authenticating the user and fetching their Destiny 2 character summary.
     """
+    logging.info("[assistant/init] POST request received.")
     try:
         access_token = req.get_json().get("access_token")
         if not access_token:
@@ -181,16 +182,16 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
         "characters": character_summary,
         "manifestReady": True
     }
-
+    logging.info("[assistant/init] Responding with assistant initialization data.")
     return func.HttpResponse(json.dumps(response, indent=2), mimetype="application/json")
 
 
-@app.route(route="", methods=["POST"])
+@app.route(route="", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def main(req: func.HttpRequest) -> func.HttpResponse:
     """
     Main entry point for the Vault assistant. Accepts either an access_token or a vault_data_path.
     """
-    logging.info("Vault assistant POST request received.")
+    logging.info("[main] POST request received.")
     try:
         body = req.get_json()
     except ValueError:
@@ -232,18 +233,19 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "vaultDataPath": vault_data_path,
             "stub": "Loading from vault data path not yet implemented."
         }
+    logging.info("[main] Responding with payload: %s", response_payload.get("message", "No message"))
     return func.HttpResponse(
         json.dumps(response_payload, indent=2),
         mimetype="application/json"
     )
 
 
-@app.route(route="auth", methods=["GET"])
+@app.route(route="auth", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def auth(req: func.HttpRequest) -> func.HttpResponse:
     """
     Handles Bungie OAuth callback and exchanges code for access and refresh tokens.
     """
-    logging.info("Processing Bungie OAuth callback...")
+    logging.info("[auth] GET request received.")
     code = req.params.get("code")
     if not code:
         return func.HttpResponse("Missing OAuth 'code' parameter.", status_code=400)
@@ -311,14 +313,16 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     </body>
     </html>
     """
+    logging.info("[auth] Responding with OAuth HTML content.")
     return func.HttpResponse(html_content, mimetype="text/html")
 
 
-@app.route(route="vault", methods=["POST"])
+@app.route(route="vault", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def vault(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the user's Destiny 2 vault inventory items.
     """
+    logging.info("[vault] POST request received.")
     try:
         access_token = req.get_json().get("access_token")
     except ValueError:
@@ -357,14 +361,16 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to get vault inventory", status_code=inv_resp.status_code)
     inventory = inv_resp.json(
     )["Response"]["profileInventory"]["data"]["items"]
+    logging.info("[vault] Responding with vault inventory data.")
     return func.HttpResponse(json.dumps(inventory, indent=2), mimetype="application/json")
 
 
-@app.route(route="characters", methods=["POST"])
+@app.route(route="characters", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def characters(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the user's Destiny 2 character equipment data.
     """
+    logging.info("[characters] POST request received.")
     try:
         access_token = req.get_json().get("access_token")
     except ValueError:
@@ -402,14 +408,16 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     if not char_resp.ok:
         return func.HttpResponse("Failed to get character equipment", status_code=char_resp.status_code)
     equipment = char_resp.json()["Response"]["characterEquipment"]["data"]
+    logging.info("[characters] Responding with character equipment data.")
     return func.HttpResponse(json.dumps(equipment, indent=2), mimetype="application/json")
 
 
-@app.route(route="manifest/item", methods=["GET"])
+@app.route(route="manifest/item", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the manifest definition for a given item hash.
     """
+    logging.info("[manifest/item] GET request received.")
     item_hash = req.params.get("id")
     if not item_hash:
         return func.HttpResponse("Missing item hash", status_code=400)
@@ -420,14 +428,16 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     definition = definitions.get(item_hash)
     if not definition:
         return func.HttpResponse("Item not found in manifest", status_code=404)
+    logging.info("[manifest/item] Responding with manifest item data.")
     return func.HttpResponse(json.dumps(definition, indent=2), mimetype="application/json")
 
 
-@app.route(route="token", methods=["GET"])
+@app.route(route="token", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def token(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns a valid access token from table storage, refreshing it with the refresh token if needed.
     """
+    logging.info("[token] GET request received.")
     try:
         table_service = TableServiceClient.from_connection_string(
             STORAGE_CONNECTION_STRING)
@@ -438,6 +448,7 @@ def token(req: func.HttpRequest) -> func.HttpResponse:
             access_token = entity.get("accessToken")
             if not access_token:
                 return func.HttpResponse("No valid session found. Please re-authenticate via /auth.", status_code=403)
+            logging.info("[token] Responding with access token.")
             return func.HttpResponse(json.dumps({"access_token": access_token}), mimetype="application/json")
         except Exception:
             return func.HttpResponse("No valid session found. Please re-authenticate via /auth.", status_code=403)
