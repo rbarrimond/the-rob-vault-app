@@ -10,6 +10,7 @@ import os
 import json
 import logging
 import requests
+import time
 import azure.functions as func
 from azure.functions.decorators import FunctionApp
 from azure.data.tables import TableServiceClient
@@ -36,6 +37,25 @@ app = FunctionApp()
 # ----------------------
 # Helper Functions
 # ----------------------
+def retry_request(method, url, **kwargs):
+    """
+    Retry logic for Bungie API requests with exponential backoff.
+    """
+    tries = kwargs.pop("tries", 3)
+    delay = kwargs.pop("delay", 1)
+    for attempt in range(tries):
+        try:
+            response = method(url, **kwargs)
+            if response.ok:
+                return response
+            logging.warning("Request failed (status %d): %s", response.status_code, url)
+        except Exception as e:
+            logging.warning("Request error on attempt %d: %s", attempt + 1, e)
+        if attempt < tries - 1:
+            time.sleep(delay)
+            delay *= 2
+    logging.error("Max retries exceeded for request: %s", url)
+    raise Exception(f"Request failed after {tries} attempts: {url}")
 def get_manifest(headers):
     """
     Fetches and caches the Destiny 2 manifest definitions from Bungie API.
@@ -44,8 +64,12 @@ def get_manifest(headers):
     if "definitions" in manifest_cache:
         return manifest_cache["definitions"]
 
-    index_resp = requests.get(
-        f"{BUNGIE_API_BASE}/Destiny2/Manifest/", headers=headers, timeout=REQUEST_TIMEOUT)
+    index_resp = retry_request(
+        requests.get,
+        f"{BUNGIE_API_BASE}/Destiny2/Manifest/",
+        headers=headers,
+        timeout=REQUEST_TIMEOUT
+    )
     if not index_resp.ok:
         logging.error("Failed to fetch manifest index: status %d",
                       index_resp.status_code)
@@ -59,7 +83,11 @@ def get_manifest(headers):
         return {}
 
     manifest_url = f"https://www.bungie.net{en_content_path}"
-    manifest_resp = requests.get(manifest_url, timeout=REQUEST_TIMEOUT)
+    manifest_resp = retry_request(
+        requests.get,
+        manifest_url,
+        timeout=REQUEST_TIMEOUT
+    )
     if not manifest_resp.ok:
         logging.error("Failed to fetch manifest content: status %d",
                       manifest_resp.status_code)
@@ -144,8 +172,8 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
 
     # Membership lookup
     profile_url = f"{BUNGIE_API_BASE}/User/GetMembershipsForCurrentUser/"
-    profile_resp = requests.get(
-        profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    profile_resp = retry_request(
+        requests.get, profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not profile_resp.ok:
         return func.HttpResponse("Failed to get membership", status_code=profile_resp.status_code)
 
@@ -161,8 +189,8 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
 
     # Get character list
     characters_url = f"{BUNGIE_API_BASE}/Destiny2/{membership_type}/Profile/{membership_id}/?components=200"
-    char_resp = requests.get(
-        characters_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    char_resp = retry_request(
+        requests.get, characters_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not char_resp.ok:
         return func.HttpResponse("Failed to get characters", status_code=char_resp.status_code)
 
@@ -210,8 +238,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "X-API-Key": API_KEY
         }
         profile_url = f"{BUNGIE_API_BASE}/User/GetMembershipsForCurrentUser/"
-        profile_resp = requests.get(
-            profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
+        profile_resp = retry_request(
+            requests.get, profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
         if not profile_resp.ok:
             return func.HttpResponse("Failed to get membership data", status_code=profile_resp.status_code)
         profile_data = profile_resp.json().get("Response", {})
@@ -259,11 +287,11 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     try:
-        response = requests.post(
-            token_url, data=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+        response = retry_request(
+            requests.post, token_url, data=payload, headers=headers, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         token_data = response.json()
-    except requests.RequestException as e:
+    except Exception as e:
         logging.error("Token exchange failed: %s", e)
         return func.HttpResponse("OAuth token exchange failed.", status_code=500)
     # Save token info to Azure Table Storage
@@ -346,8 +374,8 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
         "X-API-Key": API_KEY
     }
     profile_url = f"{BUNGIE_API_BASE}/User/GetMembershipsForCurrentUser/"
-    profile_resp = requests.get(
-        profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    profile_resp = retry_request(
+        requests.get, profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not profile_resp.ok:
         return func.HttpResponse("Failed to get membership", status_code=profile_resp.status_code)
     profile_data = profile_resp.json()["Response"]
@@ -355,8 +383,8 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
     membership_id = membership["membershipId"]
     membership_type = membership["membershipType"]
     inventory_url = f"{BUNGIE_API_BASE}/Destiny2/{membership_type}/Profile/{membership_id}/?components=102"
-    inv_resp = requests.get(
-        inventory_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    inv_resp = retry_request(
+        requests.get, inventory_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not inv_resp.ok:
         return func.HttpResponse("Failed to get vault inventory", status_code=inv_resp.status_code)
     inventory = inv_resp.json(
@@ -394,8 +422,8 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
         "X-API-Key": API_KEY
     }
     profile_url = f"{BUNGIE_API_BASE}/User/GetMembershipsForCurrentUser/"
-    profile_resp = requests.get(
-        profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    profile_resp = retry_request(
+        requests.get, profile_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not profile_resp.ok:
         return func.HttpResponse("Failed to get membership", status_code=profile_resp.status_code)
     profile_data = profile_resp.json()["Response"]
@@ -403,8 +431,8 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     membership_id = membership["membershipId"]
     membership_type = membership["membershipType"]
     char_url = f"{BUNGIE_API_BASE}/Destiny2/{membership_type}/Profile/{membership_id}/?components=205"
-    char_resp = requests.get(char_url, headers=headers,
-                             timeout=REQUEST_TIMEOUT)
+    char_resp = retry_request(
+        requests.get, char_url, headers=headers, timeout=REQUEST_TIMEOUT)
     if not char_resp.ok:
         return func.HttpResponse("Failed to get character equipment", status_code=char_resp.status_code)
     equipment = char_resp.json()["Response"]["characterEquipment"]["data"]
