@@ -18,7 +18,7 @@ from azure.core.exceptions import ResourceExistsError
 
 # Configure logging
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
+    level=os.getenv("LOG_LEVEL", "DEBUG"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
 
