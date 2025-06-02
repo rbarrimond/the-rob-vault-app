@@ -87,3 +87,5 @@ yarn-error.log*
 
 # Local development
 *.local
+
+.azurite/
