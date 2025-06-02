@@ -16,6 +16,12 @@ from azure.data.tables import TableServiceClient
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceExistsError
 
+# Configure logging
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s"
+)
+
 # Constants and configuration
 BUNGIE_API_BASE = "https://www.bungie.net/Platform"
 API_KEY = os.getenv("BUNGIE_API_KEY")
