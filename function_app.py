@@ -253,9 +253,9 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     payload = {
         "grant_type": "authorization_code",
         "code": code,
-        "client_id": os.environ.get("CLIENT_ID"),
-        "client_secret": os.environ.get("CLIENT_SECRET"),
-        "redirect_uri": os.environ.get("REDIRECT_URI"),
+        "client_id": os.environ.get("BUNGIE_CLIENT_ID"),
+        "client_secret": os.environ.get("BUNGIE_CLIENT_SECRET"),
+        "redirect_uri": os.environ.get("BUNGIE_REDIRECT_URI"),
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     try:
