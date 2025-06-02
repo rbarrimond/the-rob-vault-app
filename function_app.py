@@ -275,10 +275,10 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
             pass  # Table may already exist
         token_entity = {
             "PartitionKey": "AuthSession",
-            "RowKey": token_data["membership_id"] if "membership_id" in token_data else "last",
-            "accessToken": token_data["access_token"],
-            "refreshToken": token_data["refresh_token"],
-            "expiresIn": token_data["expires_in"],
+            "RowKey": "last",
+            "AccessToken": token_data.get("access_token", ""),
+            "RefreshToken": token_data.get("refresh_token", ""),
+            "ExpiresIn": str(token_data.get("expires_in", "3600"))
         }
         table_client.upsert_entity(entity=token_entity)
         logging.info("Token data stored in table storage for session.")
