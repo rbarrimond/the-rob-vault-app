@@ -1,5 +1,6 @@
 requests
 azure-functions
+azure-functions-worker
 azure-data-tables
 azure-storage-blob
 azure-core
@@ -9,3 +10,7 @@ pandas
 numpy
 sqlalchemy
 python-dotenv
+setuptools
+wheel
+grpcio==1.62.1
+grpcio-tools==1.62.1
