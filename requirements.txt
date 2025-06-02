@@ -10,7 +10,4 @@ pandas
 numpy
 sqlalchemy
 python-dotenv
-setuptools
-wheel
-grpcio==1.62.1
-grpcio-tools==1.62.1
+
