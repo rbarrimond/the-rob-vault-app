@@ -1,0 +1,78 @@
+openapi: 3.0.1
+info:
+  title: Destiny 2 Vault Assistant
+  description: Azure Function App interface for managing Destiny 2 vault and character data.
+  version: 1.0.0
+servers:
+  - url: https://therobvault.azure.barrimond.net/api
+paths:
+  /auth:
+    get:
+      summary: OAuth callback
+      description: Exchanges Bungie OAuth code for tokens and stores them.
+      responses:
+        '200':
+          description: Authorization completed
+  /assistant/init:
+    post:
+      summary: Initialize assistant
+      description: Authenticates and fetches character summary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                access_token:
+                  type: string
+      responses:
+        '200':
+          description: Assistant initialized
+  /vault:
+    post:
+      summary: Get vault inventory
+      responses:
+        '200':
+          description: Vault inventory retrieved
+  /characters:
+    post:
+      summary: Get character equipment
+      responses:
+        '200':
+          description: Character equipment retrieved
+  /dim/backup:
+    post:
+      summary: Upload DIM backup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                membership_id:
+                  type: string
+                dim_backup:
+                  type: string
+      responses:
+        '200':
+          description: DIM backup saved
+  /dim/list:
+    get:
+      summary: List DIM backups
+      responses:
+        '200':
+          description: List of DIM backup blob names
+  /token:
+    get:
+      summary: Retrieve latest access token
+      responses:
+        '200':
+          description: Access token
+  /token/refresh:
+    get:
+      summary: Refresh access token
+      responses:
+        '200':
+          description: New access token

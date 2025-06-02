@@ -621,3 +621,23 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error("Token refresh failed: %s", e)
         return func.HttpResponse("Failed to refresh token.", status_code=500)
+
+@app.route(route="static/{filename}", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def serve_static(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Serves static files from the 'static' directory based on the requested filename.
+    Supports .html, .yaml, .yml, and plain text files.
+    """
+    filename = req.route_params.get("filename")
+    file_path = os.path.join("static", filename)
+    try:
+        with open(file_path, "rb") as f:
+            content = f.read()
+        mimetype = "text/plain"
+        if filename.endswith(".html"):
+            mimetype = "text/html"
+        elif filename.endswith(".yaml") or filename.endswith(".yml"):
+            mimetype = "application/x-yaml"
+        return func.HttpResponse(body=content, mimetype=mimetype)
+    except FileNotFoundError:
+        return func.HttpResponse("File not found", status_code=404)
