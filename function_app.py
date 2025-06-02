@@ -335,7 +335,7 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
             table_client = table_service.get_table_client(TABLE_NAME)
             entity = table_client.get_entity(
                 partition_key="AuthSession", row_key="last")
-            access_token = entity.get("accessToken")
+            access_token = entity.get("AccessToken")
             if not access_token:
                 return func.HttpResponse("No cached access_token available. Please authenticate.", status_code=403)
         except Exception as e:
@@ -383,7 +383,7 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
             table_client = table_service.get_table_client(TABLE_NAME)
             entity = table_client.get_entity(
                 partition_key="AuthSession", row_key="last")
-            access_token = entity.get("accessToken")
+            access_token = entity.get("AccessToken")
             if not access_token:
                 return func.HttpResponse("No cached access_token available. Please authenticate.", status_code=403)
         except Exception as e:
@@ -445,7 +445,7 @@ def token(req: func.HttpRequest) -> func.HttpResponse:
         try:
             entity = table_client.get_entity(
                 partition_key="AuthSession", row_key="last")
-            access_token = entity.get("accessToken")
+            access_token = entity.get("AccessToken")
             if not access_token:
                 return func.HttpResponse("No valid session found. Please re-authenticate via /auth.", status_code=403)
             logging.info("[token] Responding with access token.")
