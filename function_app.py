@@ -344,12 +344,29 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
             table_client.create_table()
         except ResourceExistsError:
             pass  # Table may already exist
+        # Fetch the user's membershipId to store in token_entity
+        membership_id_val = ""
+        try:
+            headers_profile = {
+                "Authorization": f"Bearer {token_data.get('access_token', '')}",
+                "X-API-Key": API_KEY
+            }
+            profile_url = f"{BUNGIE_API_BASE}/User/GetMembershipsForCurrentUser/"
+            profile_resp = retry_request(
+                requests.get, profile_url, headers=headers_profile, timeout=REQUEST_TIMEOUT)
+            if profile_resp.ok:
+                profile_data = profile_resp.json().get("Response", {})
+                if profile_data.get("destinyMemberships"):
+                    membership_id_val = profile_data["destinyMemberships"][0].get("membershipId", "")
+        except Exception as e:
+            logging.warning("Could not retrieve membershipId for token_entity: %s", e)
         token_entity = {
             "PartitionKey": "AuthSession",
             "RowKey": "last",
             "AccessToken": token_data.get("access_token", ""),
             "RefreshToken": token_data.get("refresh_token", ""),
-            "ExpiresIn": str(token_data.get("expires_in", "3600"))
+            "ExpiresIn": str(token_data.get("expires_in", "3600")),
+            "membershipId": membership_id_val
         }
         table_client.upsert_entity(entity=token_entity)
         logging.info("Token data stored in table storage for session.")
@@ -545,3 +562,62 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error("[dim/backup] Error: %s", e)
         return func.HttpResponse("Failed to save DIM backup", status_code=500)
+
+
+@app.route(route="dim/list", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def dim_list(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Lists available DIM backups stored in blob storage for the current membership ID.
+    """
+    logging.info("[dim/list] GET request received.")
+    try:
+        table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        table_client = table_service.get_table_client(TABLE_NAME)
+        entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+        membership_id = entity.get("membershipId")
+        if not membership_id:
+            return func.HttpResponse("No stored membership ID found.", status_code=400)
+        blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        container = blob_service.get_container_client("dim-backups")
+        blobs = container.list_blobs(name_starts_with=f"dim-backup-{membership_id}-")
+        blob_names = [blob.name for blob in blobs]
+        return func.HttpResponse(json.dumps({"backups": blob_names}, indent=2), mimetype="application/json")
+    except Exception as e:
+        logging.error("[dim/list] Error: %s", e)
+        return func.HttpResponse("Failed to list DIM backups", status_code=500)
+
+
+@app.route(route="token/refresh", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Refreshes access token using the stored refresh token and updates table storage.
+    """
+    logging.info("[token/refresh] GET request received.")
+    try:
+        table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        table_client = table_service.get_table_client(TABLE_NAME)
+        entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+        refresh_token_val = entity.get("RefreshToken")
+        if not refresh_token_val:
+            return func.HttpResponse("No refresh token found. Please re-authenticate.", status_code=403)
+        token_url = "https://www.bungie.net/platform/app/oauth/token/"
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token_val,
+            "client_id": os.environ.get("BUNGIE_CLIENT_ID"),
+            "client_secret": os.environ.get("BUNGIE_CLIENT_SECRET"),
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        response = retry_request(requests.post, token_url, data=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        token_data = response.json()
+        entity.update({
+            "AccessToken": token_data.get("access_token", ""),
+            "RefreshToken": token_data.get("refresh_token", ""),
+            "ExpiresIn": str(token_data.get("expires_in", "3600"))
+        })
+        table_client.upsert_entity(entity=entity)
+        return func.HttpResponse(json.dumps({"access_token": token_data["access_token"]}), mimetype="application/json")
+    except Exception as e:
+        logging.error("Token refresh failed: %s", e)
+        return func.HttpResponse("Failed to refresh token.", status_code=500)
