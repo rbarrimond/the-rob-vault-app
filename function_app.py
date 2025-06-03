@@ -190,13 +190,21 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the user's Destiny 2 vault inventory items."""
     logging.info("[vault] POST request received.")
     try:
-        access_token = req.get_json().get("access_token")
+        data = req.get_json()
+        access_token = data.get("access_token")
     except ValueError:
-        logging.error("[vault] Invalid JSON body in request.")
-        return func.HttpResponse("Invalid JSON body", status_code=400)
+        access_token = None
+
     if not access_token:
-        logging.error("[vault] Missing access_token in request.")
-        return func.HttpResponse("Missing access_token", status_code=400)
+        try:
+            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_client = table_service.get_table_client(TABLE_NAME)
+            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            access_token = entity.get("AccessToken")
+            logging.info("[vault] Using fallback access token from Table Storage.")
+        except Exception as e:
+            logging.error("[vault] Failed to retrieve token from Table Storage: %s", e)
+            return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
     inventory, status = assistant.get_vault(access_token)
     if inventory is None:
         logging.error("[vault] Failed to get vault inventory. Status: %d", status)
@@ -210,13 +218,21 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the user's Destiny 2 character equipment data."""
     logging.info("[characters] POST request received.")
     try:
-        access_token = req.get_json().get("access_token")
+        data = req.get_json()
+        access_token = data.get("access_token")
     except ValueError:
-        logging.error("[characters] Invalid JSON body in request.")
-        return func.HttpResponse("Invalid JSON body", status_code=400)
+        access_token = None
+
     if not access_token:
-        logging.error("[characters] Missing access_token in request.")
-        return func.HttpResponse("Missing access_token", status_code=400)
+        try:
+            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_client = table_service.get_table_client(TABLE_NAME)
+            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            access_token = entity.get("AccessToken")
+            logging.info("[characters] Using fallback access token from Table Storage.")
+        except Exception as e:
+            logging.error("[characters] Failed to retrieve token from Table Storage: %s", e)
+            return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
     equipment, status = assistant.get_characters(access_token)
     if equipment is None:
         logging.error("[characters] Failed to get character equipment. Status: %d", status)
