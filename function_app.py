@@ -1,3 +1,4 @@
+# pylint: disable=missing-module-docstring, missing-function-docstring, invalid-name, broad-except, line-too-long
 """
 Azure Function App for Destiny 2 Vault Assistant
 
