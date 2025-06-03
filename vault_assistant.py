@@ -3,8 +3,7 @@ import logging
 import os
 
 import requests
-from azure.storage.blob import \
-    BlobServiceClient  # Module-level import as preferred
+from azure.storage.blob import BlobServiceClient  # Module-level import as preferred
 
 from helpers import (get_manifest, retry_request, save_blob,
                      save_dim_backup_blob)
