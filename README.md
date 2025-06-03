@@ -1,6 +1,6 @@
 # The R.oB. Vault App
 
-The R.oB. Vault App is an Azure Function App and assistant for Destiny 2 players. It provides secure, programmatic access to your Destiny 2 vault, character data, and manifest information using the Bungie API. 
+The R.oB. Vault App is an Azure Function App and assistant for Destiny 2 players. It provides secure, programmatic access to your Destiny 2 vault, character data, and manifest information using the Bungie API.
 
 This app is designed to serve as a backend tool for your ChatGPT assistant, exposing a set of API endpoints that enable automated, conversational, and programmatic workflows for Destiny 2 inventory and character management. The API is intended to be consumed by your ChatGPT assistant or other clients, allowing you to:
 
