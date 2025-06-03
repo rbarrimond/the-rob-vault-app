@@ -138,8 +138,10 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
             if profile_resp.ok:
                 profile_data = profile_resp.json().get("Response", {})
                 if profile_data.get("destinyMemberships"):
-                    membership_id_val = profile_data["destinyMemberships"][0].get("membershipId", "")
-                    logging.info("[auth] Retrieved membershipId: %s", membership_id_val)
+                    membership_id_val = profile_data["destinyMemberships"][0].get(
+                        "membershipId", "")
+                    logging.info(
+                        "[auth] Retrieved membershipId: %s", membership_id_val)
         except Exception as e:
             logging.warning("[auth] Could not retrieve membershipId: %s", e)
         token_entity = {
@@ -197,17 +199,22 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
 
     if not access_token:
         try:
-            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_service = TableServiceClient.from_connection_string(
+                STORAGE_CONNECTION_STRING)
             table_client = table_service.get_table_client(TABLE_NAME)
-            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            entity = table_client.get_entity(
+                partition_key="AuthSession", row_key="last")
             access_token = entity.get("AccessToken")
-            logging.info("[vault] Using fallback access token from Table Storage.")
+            logging.info(
+                "[vault] Using fallback access token from Table Storage.")
         except Exception as e:
-            logging.error("[vault] Failed to retrieve token from Table Storage: %s", e)
+            logging.error(
+                "[vault] Failed to retrieve token from Table Storage: %s", e)
             return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
     inventory, status = assistant.get_vault(access_token)
     if inventory is None:
-        logging.error("[vault] Failed to get vault inventory. Status: %d", status)
+        logging.error(
+            "[vault] Failed to get vault inventory. Status: %d", status)
         return func.HttpResponse("Failed to get vault inventory", status_code=status)
     logging.info("[vault] Successfully returned vault inventory.")
     return func.HttpResponse(json.dumps(inventory, indent=2), mimetype="application/json")
@@ -225,17 +232,22 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
 
     if not access_token:
         try:
-            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_service = TableServiceClient.from_connection_string(
+                STORAGE_CONNECTION_STRING)
             table_client = table_service.get_table_client(TABLE_NAME)
-            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            entity = table_client.get_entity(
+                partition_key="AuthSession", row_key="last")
             access_token = entity.get("AccessToken")
-            logging.info("[characters] Using fallback access token from Table Storage.")
+            logging.info(
+                "[characters] Using fallback access token from Table Storage.")
         except Exception as e:
-            logging.error("[characters] Failed to retrieve token from Table Storage: %s", e)
+            logging.error(
+                "[characters] Failed to retrieve token from Table Storage: %s", e)
             return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
     equipment, status = assistant.get_characters(access_token)
     if equipment is None:
-        logging.error("[characters] Failed to get character equipment. Status: %d", status)
+        logging.error(
+            "[characters] Failed to get character equipment. Status: %d", status)
         return func.HttpResponse("Failed to get character equipment", status_code=status)
     logging.info("[characters] Successfully returned character equipment.")
     return func.HttpResponse(json.dumps(equipment, indent=2), mimetype="application/json")
@@ -251,7 +263,8 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Missing item hash", status_code=400)
     definition, status = assistant.get_manifest_item(item_hash)
     if definition is None:
-        logging.error("[manifest/item] Item not found in manifest. Status: %d", status)
+        logging.error(
+            "[manifest/item] Item not found in manifest. Status: %d", status)
         return func.HttpResponse("Item not found in manifest", status_code=status)
     logging.info("[manifest/item] Successfully returned manifest item.")
     return func.HttpResponse(json.dumps(definition, indent=2), mimetype="application/json")
@@ -280,9 +293,11 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
     """Lists available DIM backups stored in blob storage for the current membership ID."""
     logging.info("[dim/list] GET request received.")
     try:
-        table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        table_service = TableServiceClient.from_connection_string(
+            STORAGE_CONNECTION_STRING)
         table_client = table_service.get_table_client(TABLE_NAME)
-        entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+        entity = table_client.get_entity(
+            partition_key="AuthSession", row_key="last")
         membership_id = entity.get("membershipId")
         if not membership_id:
             logging.warning("[dim/list] No stored membership ID found.")
@@ -300,12 +315,15 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
     """Refreshes access token using the stored refresh token and updates table storage."""
     logging.info("[token/refresh] GET request received.")
     try:
-        table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        table_service = TableServiceClient.from_connection_string(
+            STORAGE_CONNECTION_STRING)
         table_client = table_service.get_table_client(TABLE_NAME)
-        entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+        entity = table_client.get_entity(
+            partition_key="AuthSession", row_key="last")
         refresh_token_val = entity.get("RefreshToken")
         if not refresh_token_val:
-            logging.warning("[token/refresh] No refresh token found. Re-authentication required.")
+            logging.warning(
+                "[token/refresh] No refresh token found. Re-authentication required.")
             return func.HttpResponse("No refresh token found. Please re-authenticate.", status_code=403)
         token_data, _ = assistant.refresh_token(refresh_token_val)
         entity.update({
