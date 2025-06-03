@@ -24,6 +24,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
 
+app = FunctionApp()
+
 # Constants and configuration
 BUNGIE_API_BASE = "https://www.bungie.net/Platform"
 API_KEY = os.getenv("BUNGIE_API_KEY")
@@ -43,7 +45,6 @@ assistant = VaultAssistant(
     timeout=REQUEST_TIMEOUT
 )
 
-app = FunctionApp()
 
 # ----------------------
 # Route Handler Functions
