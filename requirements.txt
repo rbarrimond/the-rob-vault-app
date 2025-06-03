@@ -3,5 +3,3 @@ azure-functions
 azure-data-tables
 azure-storage-blob
 azure-core
-flask
-azure-identity
