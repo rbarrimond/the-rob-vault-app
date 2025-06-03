@@ -1,13 +1,8 @@
 requests
 azure-functions
-azure-functions-worker
 azure-data-tables
 azure-storage-blob
 azure-core
-# Optional: keep or remove these as needed for your project
 flask
-pandas
-numpy
-sqlalchemy
-python-dotenv
+
 
