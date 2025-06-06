@@ -293,3 +293,14 @@ class VaultAssistant:
 
         logging.info("Decode pass complete for source: %s", source)
         return decoded_items
+    def get_session_token(self):
+        """Return current access token and membership ID, wrapped for external use."""
+        session = self.get_session()
+        return {
+            "access_token": session["access_token"],
+            "membership_id": session["membership_id"]
+        }, 200
+
+    def decode_vault(self, access_token):
+        """Decode the vault inventory using manifest definitions."""
+        return self.decode_pass(source="vault"), 200

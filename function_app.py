@@ -459,4 +459,15 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error("[characters/decoded] Failed to decode character equipment: %s", e)
         return func.HttpResponse("Failed to decode character equipment.", status_code=500)
+
+# /session/token
+@app.route(route="session/token", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def session_token(req: func.HttpRequest) -> func.HttpResponse:
+    """Returns the current access token and membership ID."""
+    try:
+        result, status_code = assistant.get_session_token()
+        return func.HttpResponse(json.dumps(result, indent=2), status_code=status_code, mimetype="application/json")
+    except Exception as e:
+        logging.error("[session/token] Failed to get session token: %s", e)
+        return func.HttpResponse("Failed to get session token.", status_code=500)
     
