@@ -210,3 +210,86 @@ class VaultAssistant:
         token_data = response.json()
         logging.info("Access token refreshed successfully.")
         return token_data, 200
+
+    def get_session(self):
+        """Retrieve stored session info including access token and membership ID."""
+        from azure.data.tables import TableServiceClient
+        logging.info("Retrieving stored session.")
+        service = TableServiceClient.from_connection_string(self.storage_conn_str)
+        table = service.get_table_client(table_name=self.table_name)
+        entity = table.get_entity(partition_key="AuthSession", row_key="last")
+        return {
+            "access_token": entity["AccessToken"],
+            "membership_id": entity["membershipId"]
+        }
+
+    def decode_inventory(self):
+        """Load and return the vault inventory from blob."""
+        from azure.storage.blob import BlobServiceClient
+        logging.info("Decoding inventory from blob.")
+        service = BlobServiceClient.from_connection_string(self.storage_conn_str)
+        container = service.get_container_client(self.blob_container)
+        session = self.get_session()
+        blob_name = f"{session['membership_id']}.json"
+        blob_data = container.download_blob(blob_name).readall()
+        return json.loads(blob_data)
+
+    def decode_characters(self):
+        """Load and return the character equipment from blob."""
+        from azure.storage.blob import BlobServiceClient
+        logging.info("Decoding characters from blob.")
+        service = BlobServiceClient.from_connection_string(self.storage_conn_str)
+        container = service.get_container_client(self.blob_container)
+        session = self.get_session()
+        blob_name = f"{session['membership_id']}-characters.json"
+        blob_data = container.download_blob(blob_name).readall()
+        return json.loads(blob_data)
+
+    def decode_pass(self, source='vault'):
+        """Decode and enrich inventory or character data using manifest definitions."""
+        logging.info("Starting decode pass for source: %s", source)
+        session = self.get_session()
+        membership_id = session["membership_id"]
+        blob_name = f"{membership_id}.json" if source == "vault" else f"{membership_id}-characters.json"
+
+        service = BlobServiceClient.from_connection_string(self.storage_conn_str)
+        container = service.get_container_client(self.blob_container)
+        blob_data = container.download_blob(blob_name).readall()
+        items = json.loads(blob_data)
+
+        # Load manifest
+        headers = {"X-API-Key": self.api_key}
+        definitions = get_manifest(headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
+
+        decoded_items = []
+        # For vault data it's a list, for characters it's a dict of charIds -> {"items": [...]}
+        if isinstance(items, list):  # Vault
+            for item in items:
+                item_hash = str(item.get("itemHash"))
+                defn = definitions.get(item_hash, {})
+                decoded_items.append({
+                    "name": defn.get("displayProperties", {}).get("name", "Unknown"),
+                    "type": defn.get("itemTypeDisplayName", "Unknown"),
+                    "itemHash": item.get("itemHash"),
+                    "itemInstanceId": item.get("itemInstanceId"),
+                })
+        elif isinstance(items, dict):  # Characters
+            for char_id, char_data in items.items():
+                char_items = char_data.get("items", [])
+                enriched_items = []
+                for item in char_items:
+                    item_hash = str(item.get("itemHash"))
+                    defn = definitions.get(item_hash, {})
+                    enriched_items.append({
+                        "name": defn.get("displayProperties", {}).get("name", "Unknown"),
+                        "type": defn.get("itemTypeDisplayName", "Unknown"),
+                        "itemHash": item.get("itemHash"),
+                        "itemInstanceId": item.get("itemInstanceId"),
+                    })
+                decoded_items.append({
+                    "characterId": char_id,
+                    "items": enriched_items
+                })
+
+        logging.info("Decode pass complete for source: %s", source)
+        return decoded_items

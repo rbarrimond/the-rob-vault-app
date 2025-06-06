@@ -1,4 +1,5 @@
 # pylint: disable=missing-module-docstring, missing-function-docstring, invalid-name, broad-except, line-too-long
+# pylint: disable=unused-argument
 """
 Azure Function App for Destiny 2 Vault Assistant
 
@@ -357,3 +358,105 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
     except FileNotFoundError:
         logging.error("[static/%s] File not found.", filename)
         return func.HttpResponse("File not found", status_code=404)
+
+@app.route(route="inventory/decoded", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def inventory_decoded(req: func.HttpRequest) -> func.HttpResponse:
+    """Returns the decoded version of the user's Destiny 2 inventory."""
+    logging.info("[inventory/decoded] POST request received.")
+    try:
+        data = req.get_json()
+        access_token = data.get("access_token")
+    except ValueError:
+        access_token = None
+
+    if not access_token:
+        try:
+            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_client = table_service.get_table_client(TABLE_NAME)
+            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            access_token = entity.get("AccessToken")
+            logging.info("[inventory/decoded] Using fallback access token from Table Storage.")
+        except Exception as e:
+            logging.error("[inventory/decoded] Failed to retrieve token: %s", e)
+            return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
+
+    try:
+        result, status = assistant.decode_inventory(access_token)
+        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
+    except Exception as e:
+        logging.error("[inventory/decoded] Failed to decode inventory: %s", e)
+        return func.HttpResponse("Failed to decode inventory.", status_code=500)
+
+# ----------------------
+# New Route Handlers
+# ----------------------
+
+# /session
+@app.route(route="session", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def get_session(req: func.HttpRequest) -> func.HttpResponse:
+    """Returns the current session information including access token and membership ID."""
+    try:
+        session_data = assistant.get_session()
+        return func.HttpResponse(json.dumps(session_data, indent=2), mimetype="application/json")
+    except Exception as e:
+        logging.error("[session] Failed to get session data: %s", e)
+        return func.HttpResponse("Failed to get session data.", status_code=500)
+
+# /vault/decoded
+@app.route(route="vault/decoded", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
+    """Returns the decoded version of the user's Destiny 2 vault inventory."""
+    logging.info("[vault/decoded] POST request received.")
+    try:
+        data = req.get_json()
+        access_token = data.get("access_token")
+    except ValueError:
+        access_token = None
+
+    if not access_token:
+        try:
+            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_client = table_service.get_table_client(TABLE_NAME)
+            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            access_token = entity.get("AccessToken")
+            logging.info("[vault/decoded] Using fallback access token from Table Storage.")
+        except Exception as e:
+            logging.error("[vault/decoded] Failed to retrieve token: %s", e)
+            return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
+
+    try:
+        result, status = assistant.decode_vault(access_token)
+        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
+    except Exception as e:
+        logging.error("[vault/decoded] Failed to decode vault: %s", e)
+        return func.HttpResponse("Failed to decode vault.", status_code=500)
+
+# /characters/decoded
+@app.route(route="characters/decoded", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
+    """Returns the decoded version of the user's Destiny 2 character equipment."""
+    logging.info("[characters/decoded] POST request received.")
+    try:
+        data = req.get_json()
+        access_token = data.get("access_token")
+    except ValueError:
+        access_token = None
+
+    if not access_token:
+        try:
+            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            table_client = table_service.get_table_client(TABLE_NAME)
+            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            access_token = entity.get("AccessToken")
+            logging.info("[characters/decoded] Using fallback access token from Table Storage.")
+        except Exception as e:
+            logging.error("[characters/decoded] Failed to retrieve token: %s", e)
+            return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
+
+    try:
+        result, status = assistant.decode_characters(access_token)
+        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
+    except Exception as e:
+        logging.error("[characters/decoded] Failed to decode character equipment: %s", e)
+        return func.HttpResponse("Failed to decode character equipment.", status_code=500)
+    
