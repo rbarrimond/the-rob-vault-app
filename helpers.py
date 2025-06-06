@@ -92,7 +92,7 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
     return definitions
 
 # Save DIM backup and metadata
-def save_dim_backup_blob(connection_string, table_name, membership_id, dim_json_str):
+def save_dim_backup_blob(connection_string, table_name, membership_id, dim_json_str, timestamp=None):
     """Save a DIM backup to blob storage and store its metadata in table storage."""
     blob_service = BlobServiceClient.from_connection_string(connection_string)
     container = blob_service.get_container_client("dim-backups")
@@ -100,7 +100,8 @@ def save_dim_backup_blob(connection_string, table_name, membership_id, dim_json_
         container.create_container()
     except ResourceExistsError:
         logging.info("Blob container 'dim-backups' already exists.")
-    timestamp = datetime.datetime.utcnow().isoformat()
+    if not timestamp:
+        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     blob_name = f"dim-backup-{membership_id}-{timestamp}.json"
     container.upload_blob(blob_name, dim_json_str, overwrite=True)
     logging.info("DIM backup saved to blob: %s", blob_name)

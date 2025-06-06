@@ -1,9 +1,9 @@
 import json
 import logging
 import os
-
 import requests
-from azure.storage.blob import BlobServiceClient  # Module-level import as preferred
+from azure.storage.blob import BlobServiceClient
+from azure.data.tables import TableServiceClient
 
 from helpers import (get_manifest, retry_request, save_blob,
                      save_dim_backup_blob)
@@ -138,10 +138,12 @@ class VaultAssistant:
     def save_dim_backup(self, membership_id, dim_json_str):
         """Save a DIM backup and its metadata."""
         logging.info("Saving DIM backup for user: %s", membership_id)
-        save_dim_backup_blob(self.storage_conn_str, self.table_name, membership_id, dim_json_str)
+        from datetime import datetime
+        timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        save_dim_backup_blob(self.storage_conn_str, self.table_name, membership_id, dim_json_str, timestamp=timestamp)
         logging.info("DIM backup saved for user: %s", membership_id)
         return True
-
+    
     def main_entry(self, access_token=None, vault_data_path=None):
         """Main entry for assistant: initialize with access_token or vault_data_path."""
         if not access_token and not vault_data_path:
@@ -213,7 +215,6 @@ class VaultAssistant:
 
     def get_session(self):
         """Retrieve stored session info including access token and membership ID."""
-        from azure.data.tables import TableServiceClient
         logging.info("Retrieving stored session.")
         service = TableServiceClient.from_connection_string(self.storage_conn_str)
         table = service.get_table_client(table_name=self.table_name)
@@ -287,4 +288,13 @@ class VaultAssistant:
         return {
             "access_token": session["access_token"],
             "membership_id": session["membership_id"]
+        }, 200
+
+    def decode_inventory(self, access_token: str) -> tuple:
+        """Decode both vault inventory and character equipment."""
+        vault, _ = self.decode_vault(access_token)
+        characters, _ = self.decode_characters(access_token)
+        return {
+            "vault": vault,
+            "characters": characters
         }, 200
