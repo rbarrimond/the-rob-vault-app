@@ -239,7 +239,7 @@ class VaultAssistant:
         headers = {"X-API-Key": self.api_key}
         return get_manifest(headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
 
-    def decode_pass(self, source: str = 'vault') -> list:
+    def _decode_blob(self, source: str = 'vault') -> list:
         """Decode and enrich inventory or character data using manifest definitions."""
         logging.info("Starting decode pass for source: %s", source)
         session = self.get_session()
@@ -282,11 +282,11 @@ class VaultAssistant:
 
     def decode_vault(self, access_token: str) -> tuple:
         """Decode the vault inventory using manifest definitions."""
-        return self.decode_pass(source="vault"), 200
+        return self._decode_blob(source="vault"), 200
 
     def decode_characters(self, access_token: str) -> tuple:
         """Decode the character equipment using manifest definitions."""
-        return self.decode_pass(source="characters"), 200
+        return self._decode_blob(source="characters"), 200
 
     def get_session_token(self) -> tuple:
         """Return current access token and membership ID, wrapped for external use."""
