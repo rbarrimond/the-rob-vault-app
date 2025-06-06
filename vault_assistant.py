@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import requests
+from datetime import datetime
 from azure.storage.blob import BlobServiceClient
 from azure.data.tables import TableServiceClient
 
@@ -138,11 +139,16 @@ class VaultAssistant:
     def save_dim_backup(self, membership_id, dim_json_str):
         """Save a DIM backup and its metadata."""
         logging.info("Saving DIM backup for user: %s", membership_id)
-        from datetime import datetime
         timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-        save_dim_backup_blob(self.storage_conn_str, self.table_name, membership_id, dim_json_str, timestamp=timestamp)
+        blob_name, hash_key, timestamp = save_dim_backup_blob(
+            self.storage_conn_str, self.table_name, membership_id, dim_json_str, timestamp=timestamp)
         logging.info("DIM backup saved for user: %s", membership_id)
-        return True
+        return {
+            "message": "DIM backup saved successfully.",
+            "blob": blob_name,
+            "hash": hash_key,
+            "timestamp": timestamp
+        }, 200
     
     def main_entry(self, access_token=None, vault_data_path=None):
         """Main entry for assistant: initialize with access_token or vault_data_path."""
@@ -290,11 +296,3 @@ class VaultAssistant:
             "membership_id": session["membership_id"]
         }, 200
 
-    def decode_inventory(self, access_token: str) -> tuple:
-        """Decode both vault inventory and character equipment."""
-        vault, _ = self.decode_vault(access_token)
-        characters, _ = self.decode_characters(access_token)
-        return {
-            "vault": vault,
-            "characters": characters
-        }, 200

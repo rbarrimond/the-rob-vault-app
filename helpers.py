@@ -120,3 +120,4 @@ def save_dim_backup_blob(connection_string, table_name, membership_id, dim_json_
     }
     table_client.upsert_entity(metadata)
     logging.info("DIM backup metadata stored in table.")
+    return blob_name, hash_key, timestamp

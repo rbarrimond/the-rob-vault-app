@@ -281,9 +281,9 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
         dim_backup = body.get("dim_backup")
         if not membership_id or not dim_backup:
             return func.HttpResponse("Missing membership_id or dim_backup", status_code=400)
-        assistant.save_dim_backup(membership_id, dim_backup)
+        result, status = assistant.save_dim_backup(membership_id, dim_backup)
         logging.info("[dim/backup] DIM backup saved successfully.")
-        return func.HttpResponse("DIM backup saved successfully.", status_code=200)
+        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
     except Exception as e:
         logging.error("[dim/backup] Error: %s", e)
         return func.HttpResponse("Failed to save DIM backup", status_code=500)
@@ -359,33 +359,6 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
         logging.error("[static/%s] File not found.", filename)
         return func.HttpResponse("File not found", status_code=404)
 
-@app.route(route="inventory/decoded", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
-def inventory_decoded(req: func.HttpRequest) -> func.HttpResponse:
-    """Returns the decoded version of the user's Destiny 2 inventory."""
-    logging.info("[inventory/decoded] POST request received.")
-    try:
-        data = req.get_json()
-        access_token = data.get("access_token")
-    except ValueError:
-        access_token = None
-
-    if not access_token:
-        try:
-            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
-            table_client = table_service.get_table_client(TABLE_NAME)
-            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
-            access_token = entity.get("AccessToken")
-            logging.info("[inventory/decoded] Using fallback access token from Table Storage.")
-        except Exception as e:
-            logging.error("[inventory/decoded] Failed to retrieve token: %s", e)
-            return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
-
-    try:
-        result, status = assistant.decode_inventory(access_token)
-        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
-    except Exception as e:
-        logging.error("[inventory/decoded] Failed to decode inventory: %s", e)
-        return func.HttpResponse("Failed to decode inventory.", status_code=500)
 
 # ----------------------
 # New Route Handlers
