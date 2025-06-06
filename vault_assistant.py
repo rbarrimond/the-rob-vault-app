@@ -223,46 +223,26 @@ class VaultAssistant:
             "membership_id": entity["membershipId"]
         }
 
-    def decode_inventory(self):
-        """Load and return the vault inventory from blob."""
-        from azure.storage.blob import BlobServiceClient
-        logging.info("Decoding inventory from blob.")
-        service = BlobServiceClient.from_connection_string(self.storage_conn_str)
-        container = service.get_container_client(self.blob_container)
-        session = self.get_session()
-        blob_name = f"{session['membership_id']}.json"
-        blob_data = container.download_blob(blob_name).readall()
-        return json.loads(blob_data)
+    def _get_blob_container(self):
+        """Return the blob container client for the main blob container."""
+        return BlobServiceClient.from_connection_string(self.storage_conn_str).get_container_client(self.blob_container)
 
-    def decode_characters(self):
-        """Load and return the character equipment from blob."""
-        from azure.storage.blob import BlobServiceClient
-        logging.info("Decoding characters from blob.")
-        service = BlobServiceClient.from_connection_string(self.storage_conn_str)
-        container = service.get_container_client(self.blob_container)
-        session = self.get_session()
-        blob_name = f"{session['membership_id']}-characters.json"
-        blob_data = container.download_blob(blob_name).readall()
-        return json.loads(blob_data)
+    def _get_manifest_definitions(self) -> dict:
+        """Fetch and return manifest definitions, using cache if available."""
+        headers = {"X-API-Key": self.api_key}
+        return get_manifest(headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
 
-    def decode_pass(self, source='vault'):
+    def decode_pass(self, source: str = 'vault') -> list:
         """Decode and enrich inventory or character data using manifest definitions."""
         logging.info("Starting decode pass for source: %s", source)
         session = self.get_session()
         membership_id = session["membership_id"]
         blob_name = f"{membership_id}.json" if source == "vault" else f"{membership_id}-characters.json"
-
-        service = BlobServiceClient.from_connection_string(self.storage_conn_str)
-        container = service.get_container_client(self.blob_container)
+        container = self._get_blob_container()
         blob_data = container.download_blob(blob_name).readall()
         items = json.loads(blob_data)
-
-        # Load manifest
-        headers = {"X-API-Key": self.api_key}
-        definitions = get_manifest(headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
-
+        definitions = self._get_manifest_definitions()
         decoded_items = []
-        # For vault data it's a list, for characters it's a dict of charIds -> {"items": [...]}
         if isinstance(items, list):  # Vault
             for item in items:
                 item_hash = str(item.get("itemHash"))
@@ -290,17 +270,21 @@ class VaultAssistant:
                     "characterId": char_id,
                     "items": enriched_items
                 })
-
         logging.info("Decode pass complete for source: %s", source)
         return decoded_items
-    def get_session_token(self):
+
+    def decode_vault(self, access_token: str) -> tuple:
+        """Decode the vault inventory using manifest definitions."""
+        return self.decode_pass(source="vault"), 200
+
+    def decode_characters(self, access_token: str) -> tuple:
+        """Decode the character equipment using manifest definitions."""
+        return self.decode_pass(source="characters"), 200
+
+    def get_session_token(self) -> tuple:
         """Return current access token and membership ID, wrapped for external use."""
         session = self.get_session()
         return {
             "access_token": session["access_token"],
             "membership_id": session["membership_id"]
         }, 200
-
-    def decode_vault(self, access_token):
-        """Decode the vault inventory using manifest definitions."""
-        return self.decode_pass(source="vault"), 200
