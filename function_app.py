@@ -10,14 +10,11 @@ fetching Destiny 2 vault and character data, and accessing manifest items from t
 import os
 import json
 import logging
-import requests
 
 import azure.functions as func
 from azure.functions.decorators import FunctionApp
 from azure.data.tables import TableServiceClient
-from azure.core.exceptions import ResourceExistsError
 from vault_assistant import VaultAssistant
-from helpers import retry_request
 
 # Configure logging
 logging.basicConfig(
@@ -51,46 +48,7 @@ assistant = VaultAssistant(
 # Route Handler Functions
 # ----------------------
 
-@app.route(route="assistant/init", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
-def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
-    """Initializes the assistant by authenticating the user and fetching their Destiny 2 character summary."""
-    logging.info("[assistant/init] POST request received.")
-    try:
-        access_token = req.get_json().get("access_token")
-        if not access_token:
-            return func.HttpResponse("Missing access_token", status_code=400)
-    except ValueError:
-        return func.HttpResponse("Invalid JSON body", status_code=400)
-    result, status = assistant.initialize_user(access_token)
-    if not result:
-        return func.HttpResponse("Failed to initialize user", status_code=status)
-    logging.info("[assistant/init] Successfully initialized user.")
-    return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json")
-
-
-@app.route(route="", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
-def main(req: func.HttpRequest) -> func.HttpResponse:
-    """Main entry point for the Vault assistant. Accepts either an access_token or a vault_data_path."""
-    logging.info("[main] POST request received.")
-    try:
-        body = req.get_json()
-    except ValueError:
-        logging.error("[main] Invalid JSON body in request.")
-        return func.HttpResponse("Invalid JSON", status_code=400)
-    access_token = body.get("access_token")
-    vault_data_path = body.get("vault_data_path")
-    result, status = assistant.main_entry(access_token, vault_data_path)
-    if "error" in result:
-        logging.error("[main] Error in main entry: %s", result["error"])
-        return func.HttpResponse(result["error"], status_code=status)
-    logging.info("[main] Successfully processed main entry.")
-    return func.HttpResponse(
-        json.dumps(result, indent=2),
-        mimetype="application/json"
-    )
-
-
-@app.route(route="auth", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="auth", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def auth(req: func.HttpRequest) -> func.HttpResponse:
     """Handles Bungie OAuth callback and exchanges code for access and refresh tokens."""
     logging.info("[auth] GET request received.")
@@ -98,65 +56,12 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     if not code:
         logging.error("[auth] Missing OAuth 'code' parameter in request.")
         return func.HttpResponse("Missing OAuth 'code' parameter.", status_code=400)
-    token_url = "https://www.bungie.net/platform/app/oauth/token/"
-    payload = {
-        "grant_type": "authorization_code",
-        "code": code,
-        "client_id": os.environ.get("BUNGIE_CLIENT_ID"),
-        "client_secret": os.environ.get("BUNGIE_CLIENT_SECRET"),
-        "redirect_uri": os.environ.get("BUNGIE_REDIRECT_URI"),
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
     try:
-        response = retry_request(
-            requests.post, token_url, data=payload, headers=headers, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        token_data = response.json()
-        logging.info("[auth] Successfully exchanged code for tokens.")
+        token_data = assistant.exchange_code_for_token(code)
+        logging.info("[auth] Successfully exchanged code for tokens and stored session.")
     except Exception as e:
         logging.error("[auth] Token exchange failed: %s", e)
         return func.HttpResponse("OAuth token exchange failed.", status_code=500)
-    # Save token info to Azure Table Storage
-    try:
-        table_service = TableServiceClient.from_connection_string(
-            STORAGE_CONNECTION_STRING)
-        table_client = table_service.get_table_client(TABLE_NAME)
-        try:
-            table_client.create_table()
-            logging.info("[auth] Created new table for VaultSessions.")
-        except ResourceExistsError:
-            logging.info("[auth] VaultSessions table already exists.")
-        # Fetch the user's membershipId to store in token_entity
-        membership_id_val = ""
-        try:
-            headers_profile = {
-                "Authorization": f"Bearer {token_data.get('access_token', '')}",
-                "X-API-Key": API_KEY
-            }
-            profile_url = f"{BUNGIE_API_BASE}/User/GetMembershipsForCurrentUser/"
-            profile_resp = retry_request(
-                requests.get, profile_url, headers=headers_profile, timeout=REQUEST_TIMEOUT)
-            if profile_resp.ok:
-                profile_data = profile_resp.json().get("Response", {})
-                if profile_data.get("destinyMemberships"):
-                    membership_id_val = profile_data["destinyMemberships"][0].get(
-                        "membershipId", "")
-                    logging.info(
-                        "[auth] Retrieved membershipId: %s", membership_id_val)
-        except Exception as e:
-            logging.warning("[auth] Could not retrieve membershipId: %s", e)
-        token_entity = {
-            "PartitionKey": "AuthSession",
-            "RowKey": "last",
-            "AccessToken": token_data.get("access_token", ""),
-            "RefreshToken": token_data.get("refresh_token", ""),
-            "ExpiresIn": str(token_data.get("expires_in", "3600")),
-            "membershipId": membership_id_val
-        }
-        table_client.upsert_entity(entity=token_entity)
-        logging.info("[auth] Token data stored in table storage for session.")
-    except Exception as e:
-        logging.error("[auth] Failed to store token data: %s", e)
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -184,35 +89,48 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     </body>
     </html>
     """
-    logging.info("[auth] Responding with OAuth HTML content.")
+    logging.info("[auth] Responding with OAuth HTML content and token data.")
     return func.HttpResponse(html_content, mimetype="text/html")
 
 
-@app.route(route="vault", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="assistant/init", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
+    """Initializes the assistant by authenticating the user and fetching their Destiny 2 character summary."""
+    logging.info("[assistant/init] POST request received.")
+    result, status = assistant.initialize_user()
+    if not result:
+        return func.HttpResponse("Failed to initialize user", status_code=status)
+    logging.info("[assistant/init] Successfully initialized user.")
+    return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json")
+
+
+@app.route(route="", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    """Main entry point for the Vault assistant. Accepts either an access_token or a vault_data_path."""
+    logging.info("[main] POST request received.")
+    try:
+        body = req.get_json()
+    except ValueError:
+        logging.error("[main] Invalid JSON body in request.")
+        return func.HttpResponse("Invalid JSON", status_code=400)
+    access_token = body.get("access_token")
+    vault_data_path = body.get("vault_data_path")
+    result, status = assistant.main_entry(access_token, vault_data_path)
+    if "error" in result:
+        logging.error("[main] Error in main entry: %s", result["error"])
+        return func.HttpResponse(result["error"], status_code=status)
+    logging.info("[main] Successfully processed main entry.")
+    return func.HttpResponse(
+        json.dumps(result, indent=2),
+        mimetype="application/json"
+    )
+
+
+@app.route(route="vault", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def vault(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the user's Destiny 2 vault inventory items."""
     logging.info("[vault] POST request received.")
-    try:
-        data = req.get_json()
-        access_token = data.get("access_token")
-    except ValueError:
-        access_token = None
-
-    if not access_token:
-        try:
-            table_service = TableServiceClient.from_connection_string(
-                STORAGE_CONNECTION_STRING)
-            table_client = table_service.get_table_client(TABLE_NAME)
-            entity = table_client.get_entity(
-                partition_key="AuthSession", row_key="last")
-            access_token = entity.get("AccessToken")
-            logging.info(
-                "[vault] Using fallback access token from Table Storage.")
-        except Exception as e:
-            logging.error(
-                "[vault] Failed to retrieve token from Table Storage: %s", e)
-            return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
-    inventory, status = assistant.get_vault(access_token)
+    inventory, status = assistant.get_vault()
     if inventory is None:
         logging.error(
             "[vault] Failed to get vault inventory. Status: %d", status)
@@ -221,31 +139,11 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(inventory, indent=2), mimetype="application/json")
 
 
-@app.route(route="characters", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="characters", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def characters(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the user's Destiny 2 character equipment data."""
     logging.info("[characters] POST request received.")
-    try:
-        data = req.get_json()
-        access_token = data.get("access_token")
-    except ValueError:
-        access_token = None
-
-    if not access_token:
-        try:
-            table_service = TableServiceClient.from_connection_string(
-                STORAGE_CONNECTION_STRING)
-            table_client = table_service.get_table_client(TABLE_NAME)
-            entity = table_client.get_entity(
-                partition_key="AuthSession", row_key="last")
-            access_token = entity.get("AccessToken")
-            logging.info(
-                "[characters] Using fallback access token from Table Storage.")
-        except Exception as e:
-            logging.error(
-                "[characters] Failed to retrieve token from Table Storage: %s", e)
-            return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
-    equipment, status = assistant.get_characters(access_token)
+    equipment, status = assistant.get_characters()
     if equipment is None:
         logging.error(
             "[characters] Failed to get character equipment. Status: %d", status)
@@ -254,7 +152,7 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(equipment, indent=2), mimetype="application/json")
 
 
-@app.route(route="manifest/item", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="manifest/item", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the manifest definition for a given item hash."""
     logging.info("[manifest/item] GET request received.")
@@ -271,7 +169,7 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(definition, indent=2), mimetype="application/json")
 
 
-@app.route(route="dim/backup", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="dim/backup", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
     """Uploads a DIM backup and stores it in blob storage with metadata."""
     logging.info("[dim/backup] POST request received.")
@@ -289,7 +187,7 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to save DIM backup", status_code=500)
 
 
-@app.route(route="dim/list", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="dim/list", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def dim_list(req: func.HttpRequest) -> func.HttpResponse:
     """Lists available DIM backups stored in blob storage for the current membership ID."""
     logging.info("[dim/list] GET request received.")
@@ -311,7 +209,7 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to list DIM backups", status_code=500)
 
 
-@app.route(route="token/refresh", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="token/refresh", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
     """Refreshes access token using the stored refresh token and updates table storage."""
     logging.info("[token/refresh] GET request received.")
@@ -340,7 +238,7 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to refresh token.", status_code=500)
 
 
-@app.route(route="static/{filename}", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="static/{filename}", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def serve_static(req: func.HttpRequest) -> func.HttpResponse:
     """Serves static files from the 'static' directory based on the requested filename. Supports .html, .yaml, .yml, and plain text files."""
     filename = req.route_params.get("filename")
@@ -360,7 +258,7 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("File not found", status_code=404)
 
 
-@app.route(route="session", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="session", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def get_session(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the current session information including access token and membership ID."""
     try:
@@ -371,65 +269,31 @@ def get_session(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to get session data.", status_code=500)
 
 
-@app.route(route="vault/decoded", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="vault/decoded", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the decoded version of the user's Destiny 2 vault inventory."""
     logging.info("[vault/decoded] POST request received.")
     try:
-        data = req.get_json()
-        access_token = data.get("access_token")
-    except ValueError:
-        access_token = None
-
-    if not access_token:
-        try:
-            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
-            table_client = table_service.get_table_client(TABLE_NAME)
-            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
-            access_token = entity.get("AccessToken")
-            logging.info("[vault/decoded] Using fallback access token from Table Storage.")
-        except Exception as e:
-            logging.error("[vault/decoded] Failed to retrieve token: %s", e)
-            return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
-
-    try:
-        result, status = assistant.decode_vault(access_token)
+        result, status = assistant.decode_vault()
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
     except Exception as e:
         logging.error("[vault/decoded] Failed to decode vault: %s", e)
         return func.HttpResponse("Failed to decode vault.", status_code=500)
 
 
-@app.route(route="characters/decoded", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="characters/decoded", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the decoded version of the user's Destiny 2 character equipment."""
     logging.info("[characters/decoded] POST request received.")
     try:
-        data = req.get_json()
-        access_token = data.get("access_token")
-    except ValueError:
-        access_token = None
-
-    if not access_token:
-        try:
-            table_service = TableServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
-            table_client = table_service.get_table_client(TABLE_NAME)
-            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
-            access_token = entity.get("AccessToken")
-            logging.info("[characters/decoded] Using fallback access token from Table Storage.")
-        except Exception as e:
-            logging.error("[characters/decoded] Failed to retrieve token: %s", e)
-            return func.HttpResponse("Missing access_token and no valid session found.", status_code=403)
-
-    try:
-        result, status = assistant.decode_characters(access_token)
+        result, status = assistant.decode_characters()
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
     except Exception as e:
         logging.error("[characters/decoded] Failed to decode character equipment: %s", e)
         return func.HttpResponse("Failed to decode character equipment.", status_code=500)
 
 
-@app.route(route="session/token", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="session/token", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def session_token(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the current access token and membership ID."""
     try:
