@@ -1,16 +1,13 @@
-openapi: 3.0.1
+openapi: 3.0.0
 info:
-  title: Destiny 2 Vault Assistant
-  description: Azure Function App that integrates with the Bungie API to retrieve vault and character data, manage DIM backups, and perform authentication.
-  version: "1.0.0"
-servers:
-  - url: https://therobvault.azure.barrimond.net/api
+  title: Destiny Vault Assistant API
+  version: 1.0.0
 paths:
   /vault:
     post:
-      summary: Retrieve Destiny 2 vault inventory
+      summary: Get Destiny 2 vault inventory
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
@@ -20,14 +17,29 @@ paths:
                   type: string
       responses:
         '200':
-          description: Vault inventory
-          content:
-            application/json: {}
+          description: Vault inventory returned
+
+  /vault/decoded:
+    post:
+      summary: Decode Destiny 2 vault inventory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                access_token:
+                  type: string
+      responses:
+        '200':
+          description: Decoded vault inventory
+
   /characters:
     post:
-      summary: Retrieve Destiny 2 character equipment
+      summary: Get Destiny 2 character equipment
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
@@ -37,12 +49,27 @@ paths:
                   type: string
       responses:
         '200':
-          description: Character equipment
-          content:
-            application/json: {}
+          description: Character equipment returned
+
+  /characters/decoded:
+    post:
+      summary: Decode Destiny 2 character equipment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                access_token:
+                  type: string
+      responses:
+        '200':
+          description: Decoded character equipment
+
   /dim/backup:
     post:
-      summary: Upload a DIM backup
+      summary: Save a DIM backup
       requestBody:
         required: true
         content:
@@ -56,24 +83,66 @@ paths:
                   type: string
       responses:
         '200':
-          description: Confirmation message
+          description: DIM backup saved
+
   /dim/list:
     get:
-      summary: List stored DIM backups
+      summary: List all DIM backups
       responses:
         '200':
-          description: List of backups
-          content:
-            application/json: {}
-  /token:
+          description: DIM backups listed
+
+  /session:
     get:
-      summary: Retrieve cached access token
+      summary: Get current session info
       responses:
         '200':
-          description: Access token
+          description: Session info returned
+
+  /session/token:
+    get:
+      summary: Get access token and membership ID
+      responses:
+        '200':
+          description: Token returned
+
+  /assistant/init:
+    post:
+      summary: Initialize assistant session with access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                access_token:
+                  type: string
+      responses:
+        '200':
+          description: Assistant initialized
+
+  /manifest/item:
+    get:
+      summary: Look up Destiny 2 manifest item definition
+      parameters:
+        - in: query
+          name: definition
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: hash
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Manifest item definition returned
+
   /token/refresh:
     get:
-      summary: Refresh the current access token
+      summary: Refresh the Bungie access token
       responses:
         '200':
-          description: New access token
+          description: Access token refreshed
