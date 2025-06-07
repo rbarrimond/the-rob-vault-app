@@ -2,6 +2,8 @@ openapi: 3.0.0
 info:
   title: Destiny Vault Assistant API
   version: 1.0.0
+servers:
+  - url: https://therobvault.azure.barrimond.net/api
 paths:
   /vault:
     post:
