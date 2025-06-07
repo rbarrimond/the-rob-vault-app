@@ -360,11 +360,6 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("File not found", status_code=404)
 
 
-# ----------------------
-# New Route Handlers
-# ----------------------
-
-# /session
 @app.route(route="session", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def get_session(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the current session information including access token and membership ID."""
@@ -375,7 +370,7 @@ def get_session(req: func.HttpRequest) -> func.HttpResponse:
         logging.error("[session] Failed to get session data: %s", e)
         return func.HttpResponse("Failed to get session data.", status_code=500)
 
-# /vault/decoded
+
 @app.route(route="vault/decoded", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the decoded version of the user's Destiny 2 vault inventory."""
@@ -404,7 +399,7 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
         logging.error("[vault/decoded] Failed to decode vault: %s", e)
         return func.HttpResponse("Failed to decode vault.", status_code=500)
 
-# /characters/decoded
+
 @app.route(route="characters/decoded", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the decoded version of the user's Destiny 2 character equipment."""
@@ -433,7 +428,7 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
         logging.error("[characters/decoded] Failed to decode character equipment: %s", e)
         return func.HttpResponse("Failed to decode character equipment.", status_code=500)
 
-# /session/token
+
 @app.route(route="session/token", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def session_token(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the current access token and membership ID."""
@@ -443,4 +438,3 @@ def session_token(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error("[session/token] Failed to get session token: %s", e)
         return func.HttpResponse("Failed to get session token.", status_code=500)
-    
