@@ -48,7 +48,7 @@ assistant = VaultAssistant(
 # Route Handler Functions
 # ----------------------
 
-@app.route(route="auth", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@app.route(route="auth", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def auth(req: func.HttpRequest) -> func.HttpResponse:
     """Handles Bungie OAuth callback and exchanges code for access and refresh tokens."""
     logging.info("[auth] GET request received.")
@@ -126,10 +126,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
-@app.route(route="vault", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+@app.route(route="vault", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def vault(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the user's Destiny 2 vault inventory items."""
-    logging.info("[vault] POST request received.")
+    logging.info("[vault] GET request received.")
     inventory, status = assistant.get_vault()
     if inventory is None:
         logging.error(
@@ -139,10 +139,10 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(inventory, indent=2), mimetype="application/json")
 
 
-@app.route(route="characters", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+@app.route(route="characters", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def characters(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the user's Destiny 2 character equipment data."""
-    logging.info("[characters] POST request received.")
+    logging.info("[characters] GET request received.")
     equipment, status = assistant.get_characters()
     if equipment is None:
         logging.error(
@@ -154,19 +154,27 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="manifest/item", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
-    """Returns the manifest definition for a given item hash."""
+    """Returns the manifest definition for a given item definition and hash."""
     logging.info("[manifest/item] GET request received.")
-    item_hash = req.params.get("id")
-    if not item_hash:
-        logging.error("[manifest/item] Missing item hash in request.")
-        return func.HttpResponse("Missing item hash", status_code=400)
-    definition, status = assistant.get_manifest_item(item_hash)
-    if definition is None:
+    definition = req.params.get("definition")
+    hash_val = req.params.get("hash")
+    if not definition or not hash_val:
+        logging.error("[manifest/item] Missing 'definition' or 'hash' in request.")
+        return func.HttpResponse("Missing 'definition' or 'hash' query parameter.", status_code=400)
+    try:
+        hash_str = str(hash_val)
+        # Optionally, validate hash is integer
+        int(hash_val)
+    except Exception:
+        return func.HttpResponse("'hash' must be an integer.", status_code=400)
+    # The assistant expects item_hash as string
+    definition_data, status = assistant.get_manifest_item(hash_str)
+    if definition_data is None:
         logging.error(
             "[manifest/item] Item not found in manifest. Status: %d", status)
         return func.HttpResponse("Item not found in manifest", status_code=status)
     logging.info("[manifest/item] Successfully returned manifest item.")
-    return func.HttpResponse(json.dumps(definition, indent=2), mimetype="application/json")
+    return func.HttpResponse(json.dumps(definition_data, indent=2), mimetype="application/json")
 
 
 @app.route(route="dim/backup", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
@@ -176,10 +184,10 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
     try:
         body = req.get_json()
         membership_id = body.get("membership_id")
-        dim_backup = body.get("dim_backup")
-        if not membership_id or not dim_backup:
+        dim_backup_data = body.get("dim_backup")
+        if not membership_id or not dim_backup_data:
             return func.HttpResponse("Missing membership_id or dim_backup", status_code=400)
-        result, status = assistant.save_dim_backup(membership_id, dim_backup)
+        result, status = assistant.save_dim_backup(membership_id, dim_backup_data)
         logging.info("[dim/backup] DIM backup saved successfully.")
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
     except Exception as e:
@@ -201,7 +209,7 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
         if not membership_id:
             logging.warning("[dim/list] No stored membership ID found.")
             return func.HttpResponse("No stored membership ID found.", status_code=400)
-        result, status = assistant.list_dim_backups(membership_id)
+        result, _ = assistant.list_dim_backups(membership_id)
         logging.info("[dim/list] Successfully retrieved DIM backups.")
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json")
     except Exception as e:
@@ -269,10 +277,10 @@ def get_session(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to get session data.", status_code=500)
 
 
-@app.route(route="vault/decoded", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+@app.route(route="vault/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the decoded version of the user's Destiny 2 vault inventory."""
-    logging.info("[vault/decoded] POST request received.")
+    logging.info("[vault/decoded] GET request received.")
     try:
         result, status = assistant.decode_vault()
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
@@ -281,10 +289,10 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to decode vault.", status_code=500)
 
 
-@app.route(route="characters/decoded", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+@app.route(route="characters/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """Returns the decoded version of the user's Destiny 2 character equipment."""
-    logging.info("[characters/decoded] POST request received.")
+    logging.info("[characters/decoded] GET request received.")
     try:
         result, status = assistant.decode_characters()
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)

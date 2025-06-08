@@ -4,71 +4,40 @@ info:
   version: 1.0.0
 servers:
   - url: https://therobvault.azure.barrimond.net/api
+security:
+  - function_key: []
 paths:
+  /auth:
+    get:
+      summary: OAuth callback (public)
+      security: []
+      responses:
+        '200':
+          description: Auth complete
   /vault:
-    post:
+    get:
       summary: Get Destiny 2 vault inventory
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                access_token:
-                  type: string
       responses:
         '200':
           description: Vault inventory returned
-
   /vault/decoded:
-    post:
+    get:
       summary: Decode Destiny 2 vault inventory
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                access_token:
-                  type: string
       responses:
         '200':
           description: Decoded vault inventory
-
   /characters:
-    post:
+    get:
       summary: Get Destiny 2 character equipment
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                access_token:
-                  type: string
       responses:
         '200':
           description: Character equipment returned
-
   /characters/decoded:
-    post:
+    get:
       summary: Decode Destiny 2 character equipment
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                access_token:
-                  type: string
       responses:
         '200':
           description: Decoded character equipment
-
   /dim/backup:
     post:
       summary: Save a DIM backup
@@ -86,28 +55,24 @@ paths:
       responses:
         '200':
           description: DIM backup saved
-
   /dim/list:
     get:
       summary: List all DIM backups
       responses:
         '200':
           description: DIM backups listed
-
   /session:
     get:
       summary: Get current session info
       responses:
         '200':
           description: Session info returned
-
   /session/token:
     get:
       summary: Get access token and membership ID
       responses:
         '200':
           description: Token returned
-
   /assistant/init:
     post:
       summary: Initialize assistant session with access token
@@ -123,7 +88,6 @@ paths:
       responses:
         '200':
           description: Assistant initialized
-
   /manifest/item:
     get:
       summary: Look up Destiny 2 manifest item definition
@@ -141,10 +105,15 @@ paths:
       responses:
         '200':
           description: Manifest item definition returned
-
   /token/refresh:
     get:
       summary: Refresh the Bungie access token
       responses:
         '200':
           description: Access token refreshed
+components:
+  securitySchemes:
+    function_key:
+      type: apiKey
+      name: x-functions-key
+      in: header
