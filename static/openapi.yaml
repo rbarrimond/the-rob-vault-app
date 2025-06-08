@@ -7,6 +7,23 @@ servers:
 security:
   - function_key: []
 paths:
+  /:
+    post:
+      summary: Main entry point for Vault Assistant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                access_token:
+                  type: string
+                vault_data_path:
+                  type: string
+      responses:
+        '200':
+          description: Assistant response
   /auth:
     get:
       summary: OAuth callback (public)
@@ -111,6 +128,20 @@ paths:
       responses:
         '200':
           description: Access token refreshed
+  /static/{filename}:
+    get:
+      summary: Serve static file by filename
+      parameters:
+        - in: path
+          name: filename
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Static file served
+        '404':
+          description: File not found
 components:
   securitySchemes:
     function_key:
