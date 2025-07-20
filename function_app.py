@@ -43,7 +43,6 @@ assistant = VaultAssistant(
     timeout=REQUEST_TIMEOUT
 )
 
-
 # ----------------------
 # Route Handler Functions
 # ----------------------
