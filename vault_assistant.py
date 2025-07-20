@@ -21,7 +21,52 @@ class VaultAssistant:
         self.manifest_cache = manifest_cache
         self.api_base = api_base
         self.timeout = timeout
+        self._token_expiry_margin = 60  # seconds before expiry to refresh
 
+    def _get_token_entity(self):
+        table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
+        table_client = table_service.get_table_client(self.table_name)
+        try:
+            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            return entity
+        except Exception:
+            return None
+
+    def _is_token_expired(self):
+        entity = self._get_token_entity()
+        if not entity:
+            return True
+        expires_in = int(entity.get("ExpiresIn", "3600"))
+        # Assume we store the time when token was issued
+        issued_at = entity.get("IssuedAt")
+        if not issued_at:
+            return True
+        issued_at_dt = datetime.strptime(issued_at, "%Y-%m-%dT%H:%M:%S")
+        now = datetime.utcnow()
+        elapsed = (now - issued_at_dt).total_seconds()
+        # Refresh if within margin of expiry
+        return elapsed > (expires_in - self._token_expiry_margin)
+
+    def _ensure_token_valid(self):
+        entity = self._get_token_entity()
+        if not entity:
+            return None
+        if self._is_token_expired():
+            refresh_token_val = entity.get("RefreshToken")
+            if refresh_token_val:
+                token_data, _ = self.refresh_token(refresh_token_val)
+                # Update entity with new token info
+                entity.update({
+                    "AccessToken": token_data.get("access_token", ""),
+                    "RefreshToken": token_data.get("refresh_token", ""),
+                    "ExpiresIn": str(token_data.get("expires_in", "3600")),
+                    "IssuedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+                })
+                table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
+                table_client = table_service.get_table_client(self.table_name)
+                table_client.upsert_entity(entity=entity)
+        return entity
+    
     def exchange_code_for_token(self, code: str) -> dict:
         """Exchange OAuth code for access/refresh token, store in Table Storage, and return token data."""
         token_url = "https://www.bungie.net/platform/app/oauth/token/"
@@ -69,7 +114,8 @@ class VaultAssistant:
             "AccessToken": token_data.get("access_token", ""),
             "RefreshToken": token_data.get("refresh_token", ""),
             "ExpiresIn": str(token_data.get("expires_in", "3600")),
-            "membershipId": membership_id_val
+            "membershipId": membership_id_val,
+            "IssuedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
         }
         table_client.upsert_entity(entity=token_entity)
         logging.info(
@@ -79,10 +125,9 @@ class VaultAssistant:
     def get_session(self):
         """Retrieve stored session info including access token and membership ID."""
         logging.info("Retrieving stored session.")
-        service = TableServiceClient.from_connection_string(
-            self.storage_conn_str)
-        table = service.get_table_client(table_name=self.table_name)
-        entity = table.get_entity(partition_key="AuthSession", row_key="last")
+        entity = self._ensure_token_valid()
+        if not entity:
+            return {"access_token": None, "membership_id": None}
         return {
             "access_token": entity["AccessToken"],
             "membership_id": entity["membershipId"]
