@@ -1,9 +1,21 @@
-from datetime import datetime
-from azure.storage.blob import BlobServiceClient
-from azure.data.tables import TableServiceClient
+"""
+Vault Assistant module for Destiny 2.
+
+This module provides the VaultAssistant class, which encapsulates business logic for:
+- OAuth authentication and token refresh with Bungie.net
+- Secure storage and retrieval of session tokens using Azure Table Storage
+- Fetching and decoding Destiny 2 vault and character data
+- Saving and listing DIM (Destiny Item Manager) backups in Azure Blob Storage
+- Integration with Azure services for secure, scalable, and maintainable operations
+
+All API interactions, manifest lookups, and backup operations are managed through this class.
+"""
 import os
 import json
 import logging
+from datetime import datetime
+from azure.storage.blob import BlobServiceClient
+from azure.data.tables import TableServiceClient
 import requests
 from helpers import (get_manifest, retry_request,
                      save_blob, save_dim_backup_blob)
@@ -24,12 +36,18 @@ class VaultAssistant:
         self._token_expiry_margin = 60  # seconds before expiry to refresh
 
     def _get_token_entity(self):
-        table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
+        from azure.core.exceptions import ResourceNotFoundError, AzureError
+        table_service = TableServiceClient.from_connection_string(
+            self.storage_conn_str)
         table_client = table_service.get_table_client(self.table_name)
         try:
-            entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            entity = table_client.get_entity(
+                partition_key="AuthSession", row_key="last")
             return entity
-        except Exception:
+        except ResourceNotFoundError:
+            return None
+        except AzureError as e:
+            logging.error("Azure Table error in _get_token_entity: %s", e)
             return None
 
     def _is_token_expired(self):
@@ -62,11 +80,12 @@ class VaultAssistant:
                     "ExpiresIn": str(token_data.get("expires_in", "3600")),
                     "IssuedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
                 })
-                table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
+                table_service = TableServiceClient.from_connection_string(
+                    self.storage_conn_str)
                 table_client = table_service.get_table_client(self.table_name)
                 table_client.upsert_entity(entity=entity)
         return entity
-    
+
     def exchange_code_for_token(self, code: str) -> dict:
         """Exchange OAuth code for access/refresh token, store in Table Storage, and return token data."""
         token_url = "https://www.bungie.net/platform/app/oauth/token/"
@@ -97,17 +116,23 @@ class VaultAssistant:
                 if profile_data.get("destinyMemberships"):
                     membership_id_val = profile_data["destinyMemberships"][0].get(
                         "membershipId", "")
-        except Exception as e:
+        except requests.RequestException as e:
             logging.warning(
-                "[assistant] Could not retrieve membershipId: %s", e)
+                "[assistant] Could not retrieve membershipId due to network error: %s", e)
+        except (KeyError, ValueError) as e:
+            logging.warning(
+                "[assistant] Could not parse membershipId: %s", e)
         # Store in Table Storage
         table_service = TableServiceClient.from_connection_string(
             self.storage_conn_str)
         table_client = table_service.get_table_client(self.table_name)
+        from azure.core.exceptions import ResourceExistsError, AzureError
         try:
             table_client.create_table()
-        except Exception:
+        except ResourceExistsError:
             pass
+        except AzureError as e:
+            logging.warning("[assistant] Azure Table error on create_table: %s", e)
         token_entity = {
             "PartitionKey": "AuthSession",
             "RowKey": "last",

@@ -47,6 +47,7 @@ assistant = VaultAssistant(
 # Route Handler Functions
 # ----------------------
 
+
 @app.route(route="auth", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def auth(req: func.HttpRequest) -> func.HttpResponse:
     """Handles Bungie OAuth callback and exchanges code for access and refresh tokens."""
@@ -57,7 +58,8 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Missing OAuth 'code' parameter.", status_code=400)
     try:
         token_data = assistant.exchange_code_for_token(code)
-        logging.info("[auth] Successfully exchanged code for tokens and stored session.")
+        logging.info(
+            "[auth] Successfully exchanged code for tokens and stored session.")
     except Exception as e:
         logging.error("[auth] Token exchange failed: %s", e)
         return func.HttpResponse("OAuth token exchange failed.", status_code=500)
@@ -158,7 +160,8 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     definition = req.params.get("definition")
     hash_val = req.params.get("hash")
     if not definition or not hash_val:
-        logging.error("[manifest/item] Missing 'definition' or 'hash' in request.")
+        logging.error(
+            "[manifest/item] Missing 'definition' or 'hash' in request.")
         return func.HttpResponse("Missing 'definition' or 'hash' query parameter.", status_code=400)
     try:
         hash_str = str(hash_val)
@@ -186,7 +189,8 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
         dim_backup_data = body.get("dim_backup")
         if not membership_id or not dim_backup_data:
             return func.HttpResponse("Missing membership_id or dim_backup", status_code=400)
-        result, status = assistant.save_dim_backup(membership_id, dim_backup_data)
+        result, status = assistant.save_dim_backup(
+            membership_id, dim_backup_data)
         logging.info("[dim/backup] DIM backup saved successfully.")
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
     except Exception as e:
@@ -296,7 +300,8 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
         result, status = assistant.decode_characters()
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
     except Exception as e:
-        logging.error("[characters/decoded] Failed to decode character equipment: %s", e)
+        logging.error(
+            "[characters/decoded] Failed to decode character equipment: %s", e)
         return func.HttpResponse("Failed to decode character equipment.", status_code=500)
 
 
