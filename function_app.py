@@ -48,6 +48,11 @@ assistant = VaultAssistant(
 # ----------------------
 
 
+@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
+    """Health check endpoint for Azure monitoring."""
+    return func.HttpResponse(json.dumps({"status": "ok"}), mimetype="application/json", status_code=200)
+
 @app.route(route="auth", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def auth(req: func.HttpRequest) -> func.HttpResponse:
     """Handles Bungie OAuth callback and exchanges code for access and refresh tokens."""
@@ -248,25 +253,16 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
         logging.error("Token refresh failed: %s", e)
         return func.HttpResponse("Failed to refresh token.", status_code=500)
 
-
 @app.route(route="static/{filename}", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def serve_static(req: func.HttpRequest) -> func.HttpResponse:
-    """Serves static files from the 'static' directory based on the requested filename. Supports .html, .yaml, .yml, and plain text files."""
+    """[DEPRECATED] This endpoint is deprecated and no longer serves static files. Use a dedicated static file host or CDN instead."""
     filename = req.route_params.get("filename")
-    file_path = os.path.join("static", filename)
-    try:
-        with open(file_path, "rb") as f:
-            content = f.read()
-        mimetype = "text/plain"
-        if filename.endswith(".html"):
-            mimetype = "text/html"
-        elif filename.endswith(".yaml") or filename.endswith(".yml"):
-            mimetype = "application/x-yaml"
-        logging.info("[static/%s] Serving static file.", filename)
-        return func.HttpResponse(body=content, mimetype=mimetype)
-    except FileNotFoundError:
-        logging.error("[static/%s] File not found.", filename)
-        return func.HttpResponse("File not found", status_code=404)
+    logging.warning("[static/%s] Deprecated endpoint called. Returning 410 Gone.", filename)
+    return func.HttpResponse(
+        "This endpoint is deprecated and no longer serves static files.",
+        status_code=410,
+        mimetype="text/plain"
+    )
 
 
 @app.route(route="session", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
