@@ -14,17 +14,23 @@ import os
 import json
 import logging
 from datetime import datetime
+
+import requests
 from azure.storage.blob import BlobServiceClient
 from azure.data.tables import TableServiceClient
-import requests
-from helpers import (get_manifest, retry_request,
-                     save_blob, save_dim_backup_blob)
+from azure.core.exceptions import ResourceNotFoundError, AzureError, ResourceExistsError
+from helpers import (
+    get_manifest,
+    retry_request,
+    save_blob,
+    save_dim_backup_blob
+)
 
 
 class VaultAssistant:
     """Business logic for Destiny 2 Vault Assistant operations."""
 
-    def __init__(self, api_key, storage_conn_str, table_name, blob_container, manifest_cache, api_base, timeout):
+    def __init__(self, api_key: str, storage_conn_str: str, table_name: str, blob_container: str, manifest_cache: dict, api_base: str, timeout: int):
         """Initialize VaultAssistant with configuration and dependencies."""
         self.api_key = api_key
         self.storage_conn_str = storage_conn_str
@@ -35,8 +41,7 @@ class VaultAssistant:
         self.timeout = timeout
         self._token_expiry_margin = 60  # seconds before expiry to refresh
 
-    def _get_token_entity(self):
-        from azure.core.exceptions import ResourceNotFoundError, AzureError
+    def _get_token_entity(self) -> dict | None:
         table_service = TableServiceClient.from_connection_string(
             self.storage_conn_str)
         table_client = table_service.get_table_client(self.table_name)
@@ -50,7 +55,7 @@ class VaultAssistant:
             logging.error("Azure Table error in _get_token_entity: %s", e)
             return None
 
-    def _is_token_expired(self):
+    def _is_token_expired(self) -> bool:
         entity = self._get_token_entity()
         if not entity:
             return True
@@ -65,7 +70,7 @@ class VaultAssistant:
         # Refresh if within margin of expiry
         return elapsed > (expires_in - self._token_expiry_margin)
 
-    def _ensure_token_valid(self):
+    def _ensure_token_valid(self) -> dict | None:
         entity = self._get_token_entity()
         if not entity:
             return None
@@ -126,7 +131,6 @@ class VaultAssistant:
         table_service = TableServiceClient.from_connection_string(
             self.storage_conn_str)
         table_client = table_service.get_table_client(self.table_name)
-        from azure.core.exceptions import ResourceExistsError, AzureError
         try:
             table_client.create_table()
         except ResourceExistsError:
@@ -147,7 +151,7 @@ class VaultAssistant:
             "[assistant] Token data stored in table storage for session.")
         return token_data
 
-    def get_session(self):
+    def get_session(self) -> dict:
         """Retrieve stored session info including access token and membership ID."""
         logging.info("Retrieving stored session.")
         entity = self._ensure_token_valid()
@@ -158,7 +162,7 @@ class VaultAssistant:
             "membership_id": entity["membershipId"]
         }
 
-    def initialize_user(self):
+    def initialize_user(self) -> tuple[dict | None, int]:
         """Authenticate user, load manifest, and fetch Destiny 2 character summary using stored session."""
         session = self.get_session()
         access_token = session["access_token"]
@@ -209,7 +213,7 @@ class VaultAssistant:
             "manifestReady": True
         }, 200
 
-    def get_vault(self):
+    def get_vault(self) -> tuple[list, int] | tuple[None, int]:
         """Fetch user's Destiny 2 vault inventory and save to blob storage using stored session."""
         session = self.get_session()
         access_token = session["access_token"]
@@ -244,7 +248,7 @@ class VaultAssistant:
             "Vault inventory fetched and saved for user: %s", membership_id)
         return inventory, 200
 
-    def get_characters(self):
+    def get_characters(self) -> tuple[dict, int] | tuple[None, int]:
         """Fetch user's Destiny 2 character equipment and save to blob storage using stored session."""
         session = self.get_session()
         access_token = session["access_token"]
@@ -278,7 +282,7 @@ class VaultAssistant:
             "Character equipment fetched and saved for user: %s", membership_id)
         return equipment, 200
 
-    def get_manifest_item(self, item_hash):
+    def get_manifest_item(self, item_hash: str) -> tuple[dict | None, int]:
         """Return manifest definition for a given item hash."""
         headers = {"X-API-Key": self.api_key}
         logging.info("Fetching manifest item for hash: %s", item_hash)
@@ -291,7 +295,7 @@ class VaultAssistant:
         logging.info("Manifest item found for hash: %s", item_hash)
         return definition, 200
 
-    def save_dim_backup(self, membership_id, dim_json_str):
+    def save_dim_backup(self, membership_id: str, dim_json_str: str) -> tuple[dict, int]:
         """Save a DIM backup and its metadata."""
         logging.info("Saving DIM backup for user: %s", membership_id)
         timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
@@ -305,7 +309,7 @@ class VaultAssistant:
             "timestamp": timestamp
         }, 200
 
-    def main_entry(self, access_token=None, vault_data_path=None):
+    def main_entry(self, access_token: str | None = None, vault_data_path: str | None = None) -> tuple[dict, int]:
         """Main entry for assistant: initialize with access_token or vault_data_path."""
         if not access_token and not vault_data_path:
             logging.error(
@@ -351,7 +355,7 @@ class VaultAssistant:
                 "Main entry: initialized with saved data path: %s", vault_data_path)
             return response_payload, 200
 
-    def list_dim_backups(self, membership_id):
+    def list_dim_backups(self, membership_id: str) -> tuple[dict, int]:
         """List available DIM backups for a given membership ID."""
         logging.info("Listing DIM backups for user: %s", membership_id)
         blob_service = BlobServiceClient.from_connection_string(
@@ -364,7 +368,7 @@ class VaultAssistant:
                      len(blob_names), membership_id)
         return {"backups": blob_names}, 200
 
-    def refresh_token(self, refresh_token_val):
+    def refresh_token(self, refresh_token_val: str) -> tuple[dict, int]:
         """Refresh access token using the stored refresh token."""
         logging.info("Refreshing access token using refresh token.")
         token_url = "https://www.bungie.net/platform/app/oauth/token/"
@@ -382,15 +386,15 @@ class VaultAssistant:
         logging.info("Access token refreshed successfully.")
         return token_data, 200
 
-    def decode_vault(self) -> tuple:
+    def decode_vault(self) -> tuple[list, int]:
         """Decode the vault inventory using manifest definitions."""
         return self._decode_blob(source="vault"), 200
 
-    def decode_characters(self) -> tuple:
+    def decode_characters(self) -> tuple[list, int]:
         """Decode the character equipment using manifest definitions."""
         return self._decode_blob(source="characters"), 200
 
-    def get_session_token(self) -> tuple:
+    def get_session_token(self) -> tuple[dict, int]:
         """Return current access token and membership ID, wrapped for external use."""
         session = self.get_session()
         return {
@@ -398,7 +402,7 @@ class VaultAssistant:
             "membership_id": session["membership_id"]
         }, 200
 
-    def _get_blob_container(self):
+    def _get_blob_container(self) -> BlobServiceClient:
         """Return the blob container client for the main blob container."""
         return BlobServiceClient.from_connection_string(self.storage_conn_str).get_container_client(self.blob_container)
 
