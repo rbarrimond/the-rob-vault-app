@@ -128,20 +128,20 @@ paths:
       responses:
         '200':
           description: Access token refreshed
-  /static/{filename}:
-    get:
-      summary: Serve static file by filename
-      parameters:
-        - in: path
-          name: filename
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Static file served
-        '404':
-          description: File not found
+  # /static/{filename}:
+  #   get:
+  #     summary: Serve static file by filename
+  #     parameters:
+  #       - in: path
+  #         name: filename
+  #         required: true
+  #         schema:
+  #           type: string
+  #     responses:
+  #       '200':
+  #         description: Static file served
+  #       '404':
+  #         description: File not found
 components:
   securitySchemes:
     function_key:
