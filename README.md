@@ -43,7 +43,7 @@ This app is designed to serve as a backend tool for your ChatGPT assistant, expo
 - `requirements.txt` — Python dependencies
 - `local.settings.json` — Local development settings (not for production)
 - `static/openapi.yaml` — OpenAPI spec for the app
-- `static/tool.html` — Static HTML tool for the app
+- `static/index.html` — Static HTML tool for the app
 
 ## License
 
