@@ -26,7 +26,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
 
-app = FunctionApp()
+app = func.FunctionApp()
 
 # Constants and configuration
 BUNGIE_API_BASE = "https://www.bungie.net/Platform"
