@@ -3,3 +3,4 @@ azure-functions
 azure-data-tables
 azure-storage-blob
 azure-core
+psutil

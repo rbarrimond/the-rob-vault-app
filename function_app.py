@@ -7,13 +7,17 @@ This module provides HTTP-triggered Azure Functions for initializing the assista
 fetching Destiny 2 vault and character data, and accessing manifest items from the Bungie API.
 """
 
-import os
 import json
 import logging
+import os
+import platform
+import sys
 
 import azure.functions as func
-from azure.functions.decorators import FunctionApp
+import psutil
 from azure.data.tables import TableServiceClient
+from azure.functions.decorators import FunctionApp
+
 from vault_assistant import VaultAssistant
 
 # Configure logging
@@ -50,8 +54,29 @@ assistant = VaultAssistant(
 
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
-    """Health check endpoint for Azure monitoring."""
-    return func.HttpResponse(json.dumps({"status": "ok"}), mimetype="application/json", status_code=200)
+    """Health check endpoint for Azure monitoring with diagnostics."""
+    try:
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        diagnostics = {
+            "status": "ok",
+            "python_version": sys.version,
+            "platform": platform.platform(),
+            "cpu_count": psutil.cpu_count(),
+            "memory": {
+                "rss": mem_info.rss,  # Resident Set Size in bytes
+                "vms": mem_info.vms,  # Virtual Memory Size in bytes
+            },
+            "env": {
+                "LOG_LEVEL": os.getenv("LOG_LEVEL"),
+                "BUNGIE_API_KEY": bool(os.getenv("BUNGIE_API_KEY")),
+                "AZURE_STORAGE_CONNECTION_STRING": bool(os.getenv("AZURE_STORAGE_CONNECTION_STRING")),
+            }
+        }
+        return func.HttpResponse(json.dumps(diagnostics, indent=2), mimetype="application/json", status_code=200)
+    except Exception as e:
+        return func.HttpResponse(json.dumps({"status": "error", "error": str(e)}), mimetype="application/json", status_code=500)
+
 
 @app.route(route="auth", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def auth(req: func.HttpRequest) -> func.HttpResponse:
@@ -253,11 +278,13 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
         logging.error("Token refresh failed: %s", e)
         return func.HttpResponse("Failed to refresh token.", status_code=500)
 
+
 @app.route(route="static/{filename}", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def serve_static(req: func.HttpRequest) -> func.HttpResponse:
     """[DEPRECATED] This endpoint is deprecated and no longer serves static files. Use a dedicated static file host or CDN instead."""
     filename = req.route_params.get("filename")
-    logging.warning("[static/%s] Deprecated endpoint called. Returning 410 Gone.", filename)
+    logging.warning(
+        "[static/%s] Deprecated endpoint called. Returning 410 Gone.", filename)
     return func.HttpResponse(
         "This endpoint is deprecated and no longer serves static files.",
         status_code=410,
