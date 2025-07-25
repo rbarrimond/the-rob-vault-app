@@ -21,11 +21,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt --target=".python_packages/lib/site-packages"
-        working-directory: ./
+      # - name: Install dependencies
+      #   run: |
+      #     python -m pip install --upgrade pip
+      #     pip install -r requirements.txt --target=".python_packages/lib/site-packages"
+      #   working-directory: ./
 
       # - name: Archive Function App files
       #   run: |
