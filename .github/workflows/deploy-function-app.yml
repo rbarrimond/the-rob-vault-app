@@ -35,5 +35,5 @@ jobs:
           package: ./functionapp.zip
           scm-do-build-during-deployment: true
           enable-oryx-build: true
-          # remote-build: true
+          remote-build: true
           publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
