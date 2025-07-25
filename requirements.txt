@@ -4,3 +4,5 @@ azure-data-tables
 azure-storage-blob
 azure-core
 psutil
+# Workaround for Azure Functions for cryptography dependency issue
+cryptography==43.0.3
