@@ -27,18 +27,18 @@ jobs:
           pip install -r requirements.txt --target=".python_packages/lib/site-packages"
         working-directory: ./
 
-      - name: Archive Function App files
-        run: |
-          zip -r functionapp.zip . -x '*.git*' '*.github*' 'static/*'
-        working-directory: ./
+      # - name: Archive Function App files
+      #   run: |
+      #     zip -r functionapp.zip . -x '*.git*' '*.github*' 'static/*'
+      #   working-directory: ./
 
       - name: Deploy to Azure Function App
         uses: Azure/functions-action@v1
         id: fa
         with:
           app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
-          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}/functionapp.zip
+          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
           publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
-          scm-do-build-during-deployment: false
+          scm-do-build-during-deployment: true
           enable-oryx-build: true
 
