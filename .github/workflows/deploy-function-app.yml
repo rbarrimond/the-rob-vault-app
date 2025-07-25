@@ -11,7 +11,7 @@ env:
   PYTHON_VERSION: '3.11'                                          # set this to the python version to use (e.g. '3.6', '3.7', '3.8')
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
