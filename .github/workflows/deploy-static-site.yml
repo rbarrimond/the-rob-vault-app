@@ -26,7 +26,7 @@ jobs:
         run: |
           az storage blob upload-batch \
             --account-name stcoreprod59o7 \
-            --destination '$web/the-rob-vault' \
+            --destination '$web/therobvault' \
             --source ./static \
             --overwrite true \
             --auth-mode login
