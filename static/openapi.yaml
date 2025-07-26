@@ -31,30 +31,46 @@ paths:
       responses:
         '200':
           description: Auth complete
+  /health:
+    get:
+      summary: Health check endpoint for Azure monitoring with diagnostics
+      responses:
+        '200':
+          description: Health and diagnostics returned
+        '500':
+          description: Health check error
   /vault:
     get:
       summary: Get Destiny 2 vault inventory
       responses:
         '200':
           description: Vault inventory returned
+        '500':
+          description: Failed to get vault inventory
   /vault/decoded:
     get:
       summary: Decode Destiny 2 vault inventory
       responses:
         '200':
           description: Decoded vault inventory
+        '500':
+          description: Failed to decode vault
   /characters:
     get:
       summary: Get Destiny 2 character equipment
       responses:
         '200':
           description: Character equipment returned
+        '500':
+          description: Failed to get character equipment
   /characters/decoded:
     get:
       summary: Decode Destiny 2 character equipment
       responses:
         '200':
           description: Decoded character equipment
+        '500':
+          description: Failed to decode character equipment
   /dim/backup:
     post:
       summary: Save a DIM backup
@@ -72,24 +88,36 @@ paths:
       responses:
         '200':
           description: DIM backup saved
+        '400':
+          description: Missing membership_id or dim_backup
+        '500':
+          description: Failed to save DIM backup
   /dim/list:
     get:
       summary: List all DIM backups
       responses:
         '200':
           description: DIM backups listed
+        '400':
+          description: No stored membership ID found
+        '500':
+          description: Failed to list DIM backups
   /session:
     get:
       summary: Get current session info
       responses:
         '200':
           description: Session info returned
+        '500':
+          description: Failed to get session data
   /session/token:
     get:
       summary: Get access token and membership ID
       responses:
         '200':
           description: Token returned
+        '500':
+          description: Failed to get session token
   /assistant/init:
     post:
       summary: Initialize assistant session with access token
@@ -105,6 +133,8 @@ paths:
       responses:
         '200':
           description: Assistant initialized
+        '400':
+          description: Failed to initialize user
   /manifest/item:
     get:
       summary: Look up Destiny 2 manifest item definition
@@ -122,26 +152,32 @@ paths:
       responses:
         '200':
           description: Manifest item definition returned
+        '400':
+          description: Missing or invalid parameters
+        '404':
+          description: Item not found in manifest
   /token/refresh:
     get:
       summary: Refresh the Bungie access token
       responses:
         '200':
           description: Access token refreshed
-  # /static/{filename}:
-  #   get:
-  #     summary: Serve static file by filename
-  #     parameters:
-  #       - in: path
-  #         name: filename
-  #         required: true
-  #         schema:
-  #           type: string
-  #     responses:
-  #       '200':
-  #         description: Static file served
-  #       '404':
-  #         description: File not found
+        '403':
+          description: No refresh token found. Please re-authenticate.
+        '500':
+          description: Failed to refresh token
+  /static/{filename}:
+    get:
+      summary: Deprecated endpoint. No longer serves static files.
+      parameters:
+        - in: path
+          name: filename
+          required: true
+          schema:
+            type: string
+      responses:
+        '410':
+          description: This endpoint is deprecated and no longer serves static files.
 components:
   securitySchemes:
     function_key:
