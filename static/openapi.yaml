@@ -42,8 +42,6 @@ paths:
   /vault:
     get:
       summary: Get Destiny 2 vault inventory
-      security:
-        - function_key: []
       responses:
         '200':
           description: Vault inventory returned
@@ -52,8 +50,6 @@ paths:
   /vault/decoded:
     get:
       summary: Decode Destiny 2 vault inventory
-      security:
-        - function_key: []
       responses:
         '200':
           description: Decoded vault inventory
@@ -62,8 +58,6 @@ paths:
   /characters:
     get:
       summary: Get Destiny 2 character equipment
-      security:
-        - function_key: []
       responses:
         '200':
           description: Character equipment returned
@@ -72,8 +66,6 @@ paths:
   /characters/decoded:
     get:
       summary: Decode Destiny 2 character equipment
-      security:
-        - function_key: []
       responses:
         '200':
           description: Decoded character equipment
@@ -82,8 +74,6 @@ paths:
   /dim/backup:
     post:
       summary: Save a DIM backup
-      security:
-        - function_key: []
       requestBody:
         required: true
         content:
@@ -105,8 +95,6 @@ paths:
   /dim/list:
     get:
       summary: List all DIM backups
-      security:
-        - function_key: []
       responses:
         '200':
           description: DIM backups listed
@@ -117,8 +105,6 @@ paths:
   /session:
     get:
       summary: Get current session info
-      security:
-        - function_key: []
       responses:
         '200':
           description: Session info returned
@@ -127,8 +113,6 @@ paths:
   /session/token:
     get:
       summary: Get access token and membership ID
-      security:
-        - function_key: []
       responses:
         '200':
           description: Token returned
@@ -155,8 +139,6 @@ paths:
   /manifest/item:
     get:
       summary: Look up Destiny 2 manifest item definition
-      security:
-        - function_key: []
       parameters:
         - in: query
           name: definition
@@ -178,8 +160,6 @@ paths:
   /token/refresh:
     get:
       summary: Refresh the Bungie access token
-      security:
-        - function_key: []
       responses:
         '200':
           description: Access token refreshed
@@ -190,8 +170,6 @@ paths:
   /static/{filename}:
     get:
       summary: Deprecated endpoint. No longer serves static files.
-      security:
-        - function_key: []
       parameters:
         - in: path
           name: filename
