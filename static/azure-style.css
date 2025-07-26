@@ -1,43 +1,70 @@
+
 body {
-  background-color: #f3f6fa;
+  background: linear-gradient(135deg, #e6f0fa 0%, #c7e0f4 100%) fixed;
   font-family: 'Segoe UI', Arial, sans-serif;
+  min-height: 100vh;
 }
+
 .azure-header {
   background: linear-gradient(90deg, #0078d4 0%, #005ba1 100%);
   color: #fff;
-  padding: 2rem 0 1rem 0;
-  border-radius: 0 0 12px 12px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-  margin-bottom: 2rem;
+  padding: 2.5rem 0 1.5rem 0;
+  border-radius: 0 0 18px 18px;
+  box-shadow: 0 4px 24px 0 rgba(0, 120, 212, 0.10), 0 1.5px 8px 0 rgba(0,0,0,0.04);
+  margin-bottom: 2.5rem;
 }
+
 .azure-logo {
-  height: 40px;
-  margin-right: 1rem;
+  height: 44px;
+  margin-right: 1.2rem;
   vertical-align: middle;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.08));
 }
+
 .azure-card {
   border: none;
-  border-radius: 10px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 4px 32px 0 rgba(0, 120, 212, 0.10), 0 2px 12px 0 rgba(0,0,0,0.06);
+  background: linear-gradient(120deg, #fafdff 60%, #e6f2fb 100%);
 }
+
 .azure-list .list-group-item {
   border: none;
-  border-radius: 6px;
-  margin-bottom: 0.5rem;
-  background: #e6f2fb;
+  border-radius: 8px;
+  margin-bottom: 0.7rem;
+  background: linear-gradient(90deg, #e6f2fb 80%, #d0e7fa 100%);
   color: #005ba1;
   font-weight: 500;
-  transition: background 0.2s, color 0.2s;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  box-shadow: 0 1px 4px 0 rgba(0,120,212,0.04);
 }
 .azure-list .list-group-item:hover {
-  background: #0078d4;
+  background: linear-gradient(90deg, #0078d4 80%, #005ba1 100%);
   color: #fff;
+  box-shadow: 0 2px 8px 0 rgba(0,120,212,0.10);
 }
 .azure-list .fa {
   margin-right: 0.7em;
   color: #0078d4;
+  transition: color 0.2s;
 }
 .azure-list .list-group-item:hover .fa {
   color: #fff;
+}
+
+.azure-title {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.azure-subtitle {
+  font-size: 1.1rem;
+  opacity: 0.93;
+  letter-spacing: 0.1px;
+}
+.azure-legal-heading {
+  color: #0078d4;
+  font-weight: 600;
+}
+.azure-copyright {
+  font-size: 0.95rem;
 }
