@@ -137,6 +137,7 @@ paths:
   /assistant/init:
     post:
       summary: Initialize assistant session with access token
+      security: []
       requestBody:
         required: true
         content:
