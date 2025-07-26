@@ -18,8 +18,6 @@ paths:
             schema:
               type: object
               properties:
-                access_token:
-                  type: string
                 vault_data_path:
                   type: string
       responses:

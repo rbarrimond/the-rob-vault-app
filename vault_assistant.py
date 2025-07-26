@@ -310,11 +310,14 @@ class VaultAssistant:
         }, 200
 
     def main_entry(self, access_token: str | None = None, vault_data_path: str | None = None) -> tuple[dict, int]:
-        """Main entry for assistant: initialize with access_token or vault_data_path."""
+        """Main entry for assistant: initialize with access_token, stored session token, or vault_data_path."""
         if not access_token and not vault_data_path:
-            logging.error(
-                "Missing access_token or vault_data_path in main entry.")
-            return {"error": "Missing access_token or vault_data_path"}, 400
+            # Try to use the stored Bungie access token from session
+            session = self.get_session()
+            access_token = session.get("access_token")
+            if not access_token:
+                logging.error("Missing access_token or vault_data_path in main entry.")
+                return {"error": "Missing access_token or vault_data_path"}, 400
         if access_token:
             headers = {
                 "Authorization": f"Bearer {access_token}",

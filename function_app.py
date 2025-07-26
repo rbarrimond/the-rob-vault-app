@@ -143,9 +143,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except ValueError:
         logging.error("[main] Invalid JSON body in request.")
         return func.HttpResponse("Invalid JSON", status_code=400)
-    access_token = body.get("access_token")
-    vault_data_path = body.get("vault_data_path")
-    result, status = assistant.main_entry(access_token, vault_data_path)
+    # Only extract vault_data_path from the body; do not extract access_token
+    vault_data_path = body.get("vault_data_path") if body else None
+    # Always pass None for access_token so assistant uses the stored session
+    result, status = assistant.main_entry(None, vault_data_path)
     if "error" in result:
         logging.error("[main] Error in main entry: %s", result["error"])
         return func.HttpResponse(result["error"], status_code=status)
