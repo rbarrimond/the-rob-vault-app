@@ -200,3 +200,11 @@ components:
       type: apiKey
       name: x-functions-key
       in: header
+  schemas:
+    VaultItem:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
