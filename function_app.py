@@ -16,7 +16,6 @@ import sys
 import azure.functions as func
 import psutil
 from azure.data.tables import TableServiceClient
-from azure.functions.decorators import FunctionApp
 
 from vault_assistant import VaultAssistant
 
@@ -124,7 +123,7 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(html_content, mimetype="text/html")
 
 
-@app.route(route="assistant/init", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+@app.route(route="assistant/init", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
     """Initializes the assistant by authenticating the user and fetching their Destiny 2 character summary."""
     logging.info("[assistant/init] POST request received.")
