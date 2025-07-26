@@ -10,6 +10,7 @@ paths:
   /:
     post:
       summary: Main entry point for Vault Assistant
+      operationId: mainEntry
       requestBody:
         required: true
         content:
@@ -27,6 +28,7 @@ paths:
   /auth:
     get:
       summary: OAuth callback (public)
+      operationId: oauthCallback
       security: []
       responses:
         '200':
@@ -34,6 +36,7 @@ paths:
   /health:
     get:
       summary: Health check endpoint for Azure monitoring with diagnostics
+      operationId: healthCheck
       responses:
         '200':
           description: Health and diagnostics returned
@@ -42,6 +45,7 @@ paths:
   /vault:
     get:
       summary: Get Destiny 2 vault inventory
+      operationId: getVaultInventory
       responses:
         '200':
           description: Vault inventory returned
@@ -50,6 +54,7 @@ paths:
   /vault/decoded:
     get:
       summary: Decode Destiny 2 vault inventory
+      operationId: decodeVaultInventory
       responses:
         '200':
           description: Decoded vault inventory
@@ -58,6 +63,7 @@ paths:
   /characters:
     get:
       summary: Get Destiny 2 character equipment
+      operationId: getCharacterEquipment
       responses:
         '200':
           description: Character equipment returned
@@ -66,6 +72,7 @@ paths:
   /characters/decoded:
     get:
       summary: Decode Destiny 2 character equipment
+      operationId: decodeCharacterEquipment
       responses:
         '200':
           description: Decoded character equipment
@@ -74,6 +81,7 @@ paths:
   /dim/backup:
     post:
       summary: Save a DIM backup
+      operationId: saveDimBackup
       requestBody:
         required: true
         content:
@@ -95,6 +103,7 @@ paths:
   /dim/list:
     get:
       summary: List all DIM backups
+      operationId: listDimBackups
       responses:
         '200':
           description: DIM backups listed
@@ -105,6 +114,7 @@ paths:
   /session:
     get:
       summary: Get current session info
+      operationId: getSessionInfo
       responses:
         '200':
           description: Session info returned
@@ -113,6 +123,7 @@ paths:
   /session/token:
     get:
       summary: Get access token and membership ID
+      operationId: getSessionToken
       responses:
         '200':
           description: Token returned
@@ -121,6 +132,7 @@ paths:
   /assistant/init:
     post:
       summary: Initialize assistant session with access token
+      operationId: initializeAssistantSession
       security: []
       requestBody:
         required: true
@@ -139,6 +151,7 @@ paths:
   /manifest/item:
     get:
       summary: Look up Destiny 2 manifest item definition
+      operationId: getManifestItemDefinition
       parameters:
         - in: query
           name: definition
@@ -160,6 +173,7 @@ paths:
   /token/refresh:
     get:
       summary: Refresh the Bungie access token
+      operationId: refreshBungieToken
       responses:
         '200':
           description: Access token refreshed
@@ -170,6 +184,7 @@ paths:
   /static/{filename}:
     get:
       summary: Deprecated endpoint. No longer serves static files.
+      operationId: deprecatedStaticFile
       parameters:
         - in: path
           name: filename
