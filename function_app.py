@@ -174,28 +174,17 @@ def session_token(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="token/refresh", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
     """
-    Refreshes the access token using the stored refresh token and updates table storage.
+    Refreshes the access token using the stored refresh token via the assistant.
     Returns the new access token.
     """
     logging.info("[token/refresh] GET request received.")
     try:
-        table_service = TableServiceClient.from_connection_string(
-            STORAGE_CONNECTION_STRING)
-        table_client = table_service.get_table_client(TABLE_NAME)
-        entity = table_client.get_entity(
-            partition_key="AuthSession", row_key="last")
-        refresh_token_val = entity.get("RefreshToken")
+        session = assistant.get_session()
+        refresh_token_val = session.get("RefreshToken")
         if not refresh_token_val:
-            logging.warning(
-                "[token/refresh] No refresh token found. Re-authentication required.")
+            logging.warning("[token/refresh] No refresh token found. Re-authentication required.")
             return func.HttpResponse("No refresh token found. Please re-authenticate.", status_code=403)
         token_data, _ = assistant.refresh_token(refresh_token_val)
-        entity.update({
-            "AccessToken": token_data.get("access_token", ""),
-            "RefreshToken": token_data.get("refresh_token", ""),
-            "ExpiresIn": str(token_data.get("expires_in", "3600"))
-        })
-        table_client.upsert_entity(entity=entity)
         logging.info("[token/refresh] Successfully refreshed token.")
         return func.HttpResponse(json.dumps({"access_token": token_data["access_token"]}), mimetype="application/json")
     except Exception as e:
