@@ -454,3 +454,26 @@ class VaultAssistant:
                 })
         logging.info("Decode pass complete for source: %s", source)
         return decoded_items
+
+    def save_object(self, mime_object) -> tuple[dict, int]:
+        """
+        Save a MIME object (file-like) to Azure Blob Storage using save_blob helper.
+        The MIME object should have 'filename', 'content_type', and 'content' attributes.
+        Returns a dict with blob name and URL on success.
+        """
+        logging.info("Saving MIME object to blob storage.")
+        filename = getattr(mime_object, 'filename', None)
+        content_type = getattr(mime_object, 'content_type', None)
+        content = getattr(mime_object, 'content', None)
+        if not filename or not content:
+            logging.error("MIME object missing filename or content.")
+            return {"error": "Missing filename or content in MIME object."}, 400
+        try:
+            save_blob(self.storage_conn_str, self.blob_container, filename, content)
+            container_url = BlobServiceClient.from_connection_string(self.storage_conn_str).get_container_client(self.blob_container).url
+            blob_url = f"{container_url}/{filename}"
+            logging.info("Saved MIME object as blob: %s", blob_url)
+            return {"message": "Object saved successfully.", "blob": filename, "url": blob_url}, 200
+        except Exception as e:
+            logging.error("Failed to save MIME object: %s", e)
+            return {"error": f"Failed to save object: {e}"}, 500

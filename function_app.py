@@ -12,6 +12,8 @@ import logging
 import os
 import platform
 import sys
+import types
+import base64
 
 import azure.functions as func
 import psutil
@@ -49,6 +51,7 @@ assistant = VaultAssistant(
 # ----------------------
 # Route Handler Functions
 # ----------------------
+
 
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
@@ -182,7 +185,8 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
         session = assistant.get_session()
         refresh_token_val = session.get("RefreshToken")
         if not refresh_token_val:
-            logging.warning("[token/refresh] No refresh token found. Re-authentication required.")
+            logging.warning(
+                "[token/refresh] No refresh token found. Re-authentication required.")
             return func.HttpResponse("No refresh token found. Please re-authenticate.", status_code=403)
         token_data, _ = assistant.refresh_token(refresh_token_val)
         logging.info("[token/refresh] Successfully refreshed token.")
@@ -248,6 +252,7 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to get character equipment", status_code=status)
     logging.info("[characters] Successfully returned character equipment.")
     return func.HttpResponse(json.dumps(equipment, indent=2), mimetype="application/json")
+
 
 @app.route(route="vault/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
@@ -374,13 +379,38 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
-# New stub: Save an object or file to storage using the assistant
 @app.route(route="save", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def save_object(req: func.HttpRequest) -> func.HttpResponse:
     """
-    [STUB] Saves an object or file to storage using the assistant.
-    Expects a JSON body with 'object_data' or a file upload (to be implemented).
+    Save an object or file to storage using the assistant's save_object method.
+    Accepts JSON with base64 or string content, or multipart form-data (future).
     """
-    # TODO: Implement saving logic using assistant.save_object or similar
-    return func.HttpResponse("Save object endpoint not yet implemented.", status_code=501)
+    logging.info("[save] POST request received.")
+    try:
+        body = req.get_json()
+    except Exception:
+        body = None
+    if not body:
+        return func.HttpResponse(json.dumps({"error": "Missing request body"}), status_code=400, mimetype="application/json")
 
+    filename = body.get("filename") or body.get("name") or "uploaded-object"
+    content_type = body.get("content_type") or body.get(
+        "mimetype") or "application/octet-stream"
+    content = body.get("content")
+    if content is None:
+        return func.HttpResponse(json.dumps({"error": "Missing content in request"}), status_code=400, mimetype="application/json")
+
+    # If content looks like base64, decode it
+    if body.get("encoding") == "base64":
+        try:
+            content = base64.b64decode(content)
+        except Exception as e:
+            return func.HttpResponse(json.dumps({"error": f"Base64 decode failed: {e}"}), status_code=400, mimetype="application/json")
+    elif isinstance(content, str):
+        content = content.encode("utf-8")
+
+    # Create a simple MIME-like object
+    mime_obj = types.SimpleNamespace(
+        filename=filename, content_type=content_type, content=content)
+    result, status = assistant.save_object(mime_obj)
+    return func.HttpResponse(json.dumps(result), status_code=status, mimetype="application/json")

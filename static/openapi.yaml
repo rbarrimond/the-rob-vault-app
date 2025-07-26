@@ -7,6 +7,71 @@ servers:
 security:
   - function_key: []
 paths:
+  /health:
+    get:
+      summary: Health check endpoint for Azure monitoring with diagnostics
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Health and diagnostics returned
+        '500':
+          description: Health check error
+  /auth:
+    get:
+      summary: OAuth callback (public)
+      operationId: oauthCallback
+      security: []
+      responses:
+        '200':
+          description: Auth complete
+  /assistant/init:
+    post:
+      summary: Initialize assistant session with access token
+      operationId: initializeAssistantSession
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                access_token:
+                  type: string
+      responses:
+        '200':
+          description: Assistant initialized
+        '400':
+          description: Failed to initialize user
+  /session:
+    get:
+      summary: Get current session info
+      operationId: getSessionInfo
+      responses:
+        '200':
+          description: Session info returned
+        '500':
+          description: Failed to get session data
+  /session/token:
+    get:
+      summary: Get access token and membership ID
+      operationId: getSessionToken
+      responses:
+        '200':
+          description: Token returned
+        '500':
+          description: Failed to get session token
+  /token/refresh:
+    get:
+      summary: Refresh the Bungie access token
+      operationId: refreshBungieToken
+      responses:
+        '200':
+          description: Access token refreshed
+        '403':
+          description: No refresh token found. Please re-authenticate.
+        '500':
+          description: Failed to refresh token
   /:
     post:
       summary: Main entry point for Vault Assistant
@@ -23,23 +88,6 @@ paths:
       responses:
         '200':
           description: Assistant response
-  /auth:
-    get:
-      summary: OAuth callback (public)
-      operationId: oauthCallback
-      security: []
-      responses:
-        '200':
-          description: Auth complete
-  /health:
-    get:
-      summary: Health check endpoint for Azure monitoring with diagnostics
-      operationId: healthCheck
-      responses:
-        '200':
-          description: Health and diagnostics returned
-        '500':
-          description: Health check error
   /vault:
     get:
       summary: Get Destiny 2 vault inventory
@@ -76,6 +124,28 @@ paths:
           description: Decoded character equipment
         '500':
           description: Failed to decode character equipment
+  /manifest/item:
+    get:
+      summary: Look up Destiny 2 manifest item definition
+      operationId: getManifestItemDefinition
+      parameters:
+        - in: query
+          name: definition
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: hash
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Manifest item definition returned
+        '400':
+          description: Missing or invalid parameters
+        '404':
+          description: Item not found in manifest
   /dim/backup:
     post:
       summary: Save a DIM backup
@@ -109,29 +179,10 @@ paths:
           description: No stored membership ID found
         '500':
           description: Failed to list DIM backups
-  /session:
-    get:
-      summary: Get current session info
-      operationId: getSessionInfo
-      responses:
-        '200':
-          description: Session info returned
-        '500':
-          description: Failed to get session data
-  /session/token:
-    get:
-      summary: Get access token and membership ID
-      operationId: getSessionToken
-      responses:
-        '200':
-          description: Token returned
-        '500':
-          description: Failed to get session token
-  /assistant/init:
+  /save:
     post:
-      summary: Initialize assistant session with access token
-      operationId: initializeAssistantSession
-      security: []
+      summary: Save an object or file to Azure Blob Storage
+      operationId: saveObject
       requestBody:
         required: true
         content:
@@ -139,59 +190,59 @@ paths:
             schema:
               type: object
               properties:
-                access_token:
+                filename:
                   type: string
+                  description: Name of the file to save
+                  example: "myfile.txt"
+                content_type:
+                  type: string
+                  description: MIME type of the file
+                  example: "text/plain"
+                content:
+                  type: string
+                  description: File content as a string or base64-encoded string
+                  example: "SGVsbG8gd29ybGQh" # "Hello world!" base64
+                encoding:
+                  type: string
+                  description: Encoding of the content (e.g., "base64" or "utf-8")
+                  example: "base64"
       responses:
         '200':
-          description: Assistant initialized
+          description: Object saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Object saved successfully.
+                  blob:
+                    type: string
+                    example: myfile.txt
+                  url:
+                    type: string
+                    example: https://<storage-account>.blob.core.windows.net/vault-data/myfile.txt
         '400':
-          description: Failed to initialize user
-  /manifest/item:
-    get:
-      summary: Look up Destiny 2 manifest item definition
-      operationId: getManifestItemDefinition
-      parameters:
-        - in: query
-          name: definition
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: hash
-          required: true
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: Manifest item definition returned
-        '400':
-          description: Missing or invalid parameters
-        '404':
-          description: Item not found in manifest
-  /token/refresh:
-    get:
-      summary: Refresh the Bungie access token
-      operationId: refreshBungieToken
-      responses:
-        '200':
-          description: Access token refreshed
-        '403':
-          description: No refresh token found. Please re-authenticate.
+          description: Bad request (missing fields or invalid content)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Missing filename or content in MIME object.
         '500':
-          description: Failed to refresh token
-  /static/{filename}:
-    get:
-      summary: Deprecated endpoint. No longer serves static files.
-      operationId: deprecatedStaticFile
-      parameters:
-        - in: path
-          name: filename
-          required: true
-          schema:
-            type: string
-      responses:
-        '410':
-          description: This endpoint is deprecated and no longer serves static files.
+          description: Internal server error (failed to save object)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Failed to save object: <error message>"
 components:
   securitySchemes:
     function_key:
