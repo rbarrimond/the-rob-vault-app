@@ -50,7 +50,6 @@ assistant = VaultAssistant(
 # Route Handler Functions
 # ----------------------
 
-
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
     """
@@ -70,7 +69,7 @@ def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
                 "vms": mem_info.vms,  # Virtual Memory Size in bytes
             },
             "env": {
-                "LOG_LEVEL": os.getenv("LOG_LEVEL"),
+                "LOG_LEVEL": logging.getLogger().getEffectiveLevel(),
                 "BUNGIE_API_KEY": bool(os.getenv("BUNGIE_API_KEY")),
                 "AZURE_STORAGE_CONNECTION_STRING": bool(os.getenv("AZURE_STORAGE_CONNECTION_STRING")),
             }
@@ -78,6 +77,9 @@ def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(json.dumps(diagnostics, indent=2), mimetype="application/json", status_code=200)
     except Exception as e:
         return func.HttpResponse(json.dumps({"status": "error", "error": str(e)}), mimetype="application/json", status_code=500)
+
+
+# --- Authentication & Session ---
 
 
 @app.route(route="auth", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
@@ -143,6 +145,66 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json")
 
 
+@app.route(route="session", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+def get_session(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Returns the current session information including access token and membership ID.
+    """
+    try:
+        session_data = assistant.get_session()
+        return func.HttpResponse(json.dumps(session_data, indent=2), mimetype="application/json")
+    except Exception as e:
+        logging.error("[session] Failed to get session data: %s", e)
+        return func.HttpResponse("Failed to get session data.", status_code=500)
+
+
+@app.route(route="session/token", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+def session_token(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Returns the current access token and membership ID.
+    """
+    try:
+        result, status_code = assistant.get_session_token()
+        return func.HttpResponse(json.dumps(result, indent=2), status_code=status_code, mimetype="application/json")
+    except Exception as e:
+        logging.error("[session/token] Failed to get session token: %s", e)
+        return func.HttpResponse("Failed to get session token.", status_code=500)
+
+
+@app.route(route="token/refresh", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Refreshes the access token using the stored refresh token and updates table storage.
+    Returns the new access token.
+    """
+    logging.info("[token/refresh] GET request received.")
+    try:
+        table_service = TableServiceClient.from_connection_string(
+            STORAGE_CONNECTION_STRING)
+        table_client = table_service.get_table_client(TABLE_NAME)
+        entity = table_client.get_entity(
+            partition_key="AuthSession", row_key="last")
+        refresh_token_val = entity.get("RefreshToken")
+        if not refresh_token_val:
+            logging.warning(
+                "[token/refresh] No refresh token found. Re-authentication required.")
+            return func.HttpResponse("No refresh token found. Please re-authenticate.", status_code=403)
+        token_data, _ = assistant.refresh_token(refresh_token_val)
+        entity.update({
+            "AccessToken": token_data.get("access_token", ""),
+            "RefreshToken": token_data.get("refresh_token", ""),
+            "ExpiresIn": str(token_data.get("expires_in", "3600"))
+        })
+        table_client.upsert_entity(entity=entity)
+        logging.info("[token/refresh] Successfully refreshed token.")
+        return func.HttpResponse(json.dumps({"access_token": token_data["access_token"]}), mimetype="application/json")
+    except Exception as e:
+        logging.error("Token refresh failed: %s", e)
+        return func.HttpResponse("Failed to refresh token.", status_code=500)
+
+
+# --- Main Functionality Endpoints ---
+
 @app.route(route="", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def main(req: func.HttpRequest) -> func.HttpResponse:
     """
@@ -198,6 +260,34 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("[characters] Successfully returned character equipment.")
     return func.HttpResponse(json.dumps(equipment, indent=2), mimetype="application/json")
 
+@app.route(route="vault/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Returns the decoded version of the user's Destiny 2 vault inventory.
+    """
+    logging.info("[vault/decoded] GET request received.")
+    try:
+        result, status = assistant.decode_vault()
+        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
+    except Exception as e:
+        logging.error("[vault/decoded] Failed to decode vault: %s", e)
+        return func.HttpResponse("Failed to decode vault.", status_code=500)
+
+
+@app.route(route="characters/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Returns the decoded version of the user's Destiny 2 character equipment.
+    """
+    logging.info("[characters/decoded] GET request received.")
+    try:
+        result, status = assistant.decode_characters()
+        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
+    except Exception as e:
+        logging.error(
+            "[characters/decoded] Failed to decode character equipment: %s", e)
+        return func.HttpResponse("Failed to decode character equipment.", status_code=500)
+
 
 @app.route(route="manifest/item", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
@@ -227,6 +317,8 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("[manifest/item] Successfully returned manifest item.")
     return func.HttpResponse(json.dumps(definition_data, indent=2), mimetype="application/json")
 
+
+# --- DIM Backup and Data Management Endpoints ---
 
 @app.route(route="dim/backup", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
@@ -274,36 +366,7 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to list DIM backups", status_code=500)
 
 
-@app.route(route="token/refresh", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
-def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Refreshes the access token using the stored refresh token and updates table storage.
-    Returns the new access token.
-    """
-    logging.info("[token/refresh] GET request received.")
-    try:
-        table_service = TableServiceClient.from_connection_string(
-            STORAGE_CONNECTION_STRING)
-        table_client = table_service.get_table_client(TABLE_NAME)
-        entity = table_client.get_entity(
-            partition_key="AuthSession", row_key="last")
-        refresh_token_val = entity.get("RefreshToken")
-        if not refresh_token_val:
-            logging.warning(
-                "[token/refresh] No refresh token found. Re-authentication required.")
-            return func.HttpResponse("No refresh token found. Please re-authenticate.", status_code=403)
-        token_data, _ = assistant.refresh_token(refresh_token_val)
-        entity.update({
-            "AccessToken": token_data.get("access_token", ""),
-            "RefreshToken": token_data.get("refresh_token", ""),
-            "ExpiresIn": str(token_data.get("expires_in", "3600"))
-        })
-        table_client.upsert_entity(entity=entity)
-        logging.info("[token/refresh] Successfully refreshed token.")
-        return func.HttpResponse(json.dumps({"access_token": token_data["access_token"]}), mimetype="application/json")
-    except Exception as e:
-        logging.error("Token refresh failed: %s", e)
-        return func.HttpResponse("Failed to refresh token.", status_code=500)
+# --- General Utility & New Features ---
 
 
 @app.route(route="static/{filename}", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
@@ -322,56 +385,13 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
-@app.route(route="session", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
-def get_session(req: func.HttpRequest) -> func.HttpResponse:
+# New stub: Save an object or file to storage using the assistant
+@app.route(route="save", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+def save_object(req: func.HttpRequest) -> func.HttpResponse:
     """
-    Returns the current session information including access token and membership ID.
+    [STUB] Saves an object or file to storage using the assistant.
+    Expects a JSON body with 'object_data' or a file upload (to be implemented).
     """
-    try:
-        session_data = assistant.get_session()
-        return func.HttpResponse(json.dumps(session_data, indent=2), mimetype="application/json")
-    except Exception as e:
-        logging.error("[session] Failed to get session data: %s", e)
-        return func.HttpResponse("Failed to get session data.", status_code=500)
+    # TODO: Implement saving logic using assistant.save_object or similar
+    return func.HttpResponse("Save object endpoint not yet implemented.", status_code=501)
 
-
-@app.route(route="vault/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
-def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Returns the decoded version of the user's Destiny 2 vault inventory.
-    """
-    logging.info("[vault/decoded] GET request received.")
-    try:
-        result, status = assistant.decode_vault()
-        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
-    except Exception as e:
-        logging.error("[vault/decoded] Failed to decode vault: %s", e)
-        return func.HttpResponse("Failed to decode vault.", status_code=500)
-
-
-@app.route(route="characters/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
-def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Returns the decoded version of the user's Destiny 2 character equipment.
-    """
-    logging.info("[characters/decoded] GET request received.")
-    try:
-        result, status = assistant.decode_characters()
-        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
-    except Exception as e:
-        logging.error(
-            "[characters/decoded] Failed to decode character equipment: %s", e)
-        return func.HttpResponse("Failed to decode character equipment.", status_code=500)
-
-
-@app.route(route="session/token", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
-def session_token(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Returns the current access token and membership ID.
-    """
-    try:
-        result, status_code = assistant.get_session_token()
-        return func.HttpResponse(json.dumps(result, indent=2), status_code=status_code, mimetype="application/json")
-    except Exception as e:
-        logging.error("[session/token] Failed to get session token: %s", e)
-        return func.HttpResponse("Failed to get session token.", status_code=500)
