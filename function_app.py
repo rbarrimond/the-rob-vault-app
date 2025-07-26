@@ -53,7 +53,10 @@ assistant = VaultAssistant(
 
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
-    """Health check endpoint for Azure monitoring with diagnostics."""
+    """
+    Health check endpoint for Azure monitoring.
+    Returns process diagnostics including Python version, platform, CPU, memory, and key environment variables.
+    """
     try:
         process = psutil.Process()
         mem_info = process.memory_info()
@@ -79,7 +82,10 @@ def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="auth", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def auth(req: func.HttpRequest) -> func.HttpResponse:
-    """Handles Bungie OAuth callback and exchanges code for access and refresh tokens."""
+    """
+    Handles Bungie OAuth callback.
+    Exchanges the authorization code for access and refresh tokens, stores the session, and returns an HTML page to initialize the assistant.
+    """
     logging.info("[auth] GET request received.")
     code = req.params.get("code")
     if not code:
@@ -125,7 +131,10 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="assistant/init", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
-    """Initializes the assistant by authenticating the user and fetching their Destiny 2 character summary."""
+    """
+    Initializes the assistant for the user.
+    Authenticates the user and fetches their Destiny 2 character summary.
+    """
     logging.info("[assistant/init] POST request received.")
     result, status = assistant.initialize_user()
     if not result:
@@ -136,7 +145,10 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def main(req: func.HttpRequest) -> func.HttpResponse:
-    """Main entry point for the Vault assistant. Accepts either an access_token or a vault_data_path."""
+    """
+    Main entry point for the Vault assistant.
+    Accepts a POST request with a vault_data_path and processes the request using the stored session.
+    """
     logging.info("[main] POST request received.")
     try:
         body = req.get_json()
@@ -159,7 +171,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="vault", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def vault(req: func.HttpRequest) -> func.HttpResponse:
-    """Returns the user's Destiny 2 vault inventory items."""
+    """
+    Returns the user's Destiny 2 vault inventory items.
+    """
     logging.info("[vault] GET request received.")
     inventory, status = assistant.get_vault()
     if inventory is None:
@@ -172,7 +186,9 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="characters", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def characters(req: func.HttpRequest) -> func.HttpResponse:
-    """Returns the user's Destiny 2 character equipment data."""
+    """
+    Returns the user's Destiny 2 character equipment data.
+    """
     logging.info("[characters] GET request received.")
     equipment, status = assistant.get_characters()
     if equipment is None:
@@ -185,7 +201,10 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="manifest/item", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
-    """Returns the manifest definition for a given item definition and hash."""
+    """
+    Returns the manifest definition for a given Destiny 2 item.
+    Requires 'definition' and 'hash' query parameters.
+    """
     logging.info("[manifest/item] GET request received.")
     definition = req.params.get("definition")
     hash_val = req.params.get("hash")
@@ -211,7 +230,10 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="dim/backup", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
-    """Uploads a DIM backup and stores it in blob storage with metadata."""
+    """
+    Uploads a DIM backup and stores it in blob storage with metadata.
+    Expects 'membership_id' and 'dim_backup' in the POST body.
+    """
     logging.info("[dim/backup] POST request received.")
     try:
         body = req.get_json()
@@ -230,7 +252,9 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="dim/list", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def dim_list(req: func.HttpRequest) -> func.HttpResponse:
-    """Lists available DIM backups stored in blob storage for the current membership ID."""
+    """
+    Lists available DIM backups stored in blob storage for the current membership ID.
+    """
     logging.info("[dim/list] GET request received.")
     try:
         table_service = TableServiceClient.from_connection_string(
@@ -252,7 +276,10 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="token/refresh", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
-    """Refreshes access token using the stored refresh token and updates table storage."""
+    """
+    Refreshes the access token using the stored refresh token and updates table storage.
+    Returns the new access token.
+    """
     logging.info("[token/refresh] GET request received.")
     try:
         table_service = TableServiceClient.from_connection_string(
@@ -281,7 +308,10 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="static/{filename}", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def serve_static(req: func.HttpRequest) -> func.HttpResponse:
-    """[DEPRECATED] This endpoint is deprecated and no longer serves static files. Use a dedicated static file host or CDN instead."""
+    """
+    [DEPRECATED] This endpoint is deprecated and no longer serves static files.
+    Use a dedicated static file host or CDN instead.
+    """
     filename = req.route_params.get("filename")
     logging.warning(
         "[static/%s] Deprecated endpoint called. Returning 410 Gone.", filename)
@@ -294,7 +324,9 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="session", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def get_session(req: func.HttpRequest) -> func.HttpResponse:
-    """Returns the current session information including access token and membership ID."""
+    """
+    Returns the current session information including access token and membership ID.
+    """
     try:
         session_data = assistant.get_session()
         return func.HttpResponse(json.dumps(session_data, indent=2), mimetype="application/json")
@@ -305,7 +337,9 @@ def get_session(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="vault/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
-    """Returns the decoded version of the user's Destiny 2 vault inventory."""
+    """
+    Returns the decoded version of the user's Destiny 2 vault inventory.
+    """
     logging.info("[vault/decoded] GET request received.")
     try:
         result, status = assistant.decode_vault()
@@ -317,7 +351,9 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="characters/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
-    """Returns the decoded version of the user's Destiny 2 character equipment."""
+    """
+    Returns the decoded version of the user's Destiny 2 character equipment.
+    """
     logging.info("[characters/decoded] GET request received.")
     try:
         result, status = assistant.decode_characters()
@@ -330,7 +366,9 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="session/token", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def session_token(req: func.HttpRequest) -> func.HttpResponse:
-    """Returns the current access token and membership ID."""
+    """
+    Returns the current access token and membership ID.
+    """
     try:
         result, status_code = assistant.get_session_token()
         return func.HttpResponse(json.dumps(result, indent=2), status_code=status_code, mimetype="application/json")
