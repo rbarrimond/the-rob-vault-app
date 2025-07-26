@@ -309,55 +309,6 @@ class VaultAssistant:
             "timestamp": timestamp
         }, 200
 
-    def main_entry(self, access_token: str | None = None, vault_data_path: str | None = None) -> tuple[dict, int]:
-        """Main entry for assistant: initialize with access_token, stored session token, or vault_data_path."""
-        if not access_token and not vault_data_path:
-            # Try to use the stored Bungie access token from session
-            session = self.get_session()
-            access_token = session.get("access_token")
-            if not access_token:
-                logging.error("Missing access_token or vault_data_path in main entry.")
-                return {"error": "Missing access_token or vault_data_path"}, 400
-        if access_token:
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "X-API-Key": self.api_key
-            }
-            profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
-            logging.info("Main entry: initializing with access token.")
-            profile_resp = retry_request(
-                requests.get, profile_url, headers=headers, timeout=self.timeout)
-            if not profile_resp.ok:
-                logging.error(
-                    "Failed to get membership data: status %d", profile_resp.status_code)
-                return {"error": "Failed to get membership data"}, profile_resp.status_code
-            profile_data = profile_resp.json().get("Response", {})
-            if not profile_data.get("destinyMemberships"):
-                logging.error("No Destiny memberships found in main entry.")
-                return {"error": "No Destiny memberships found"}, 404
-            membership = profile_data["destinyMemberships"][0]
-            membership_id = membership.get("membershipId")
-            membership_type = membership.get("membershipType")
-            display_name = membership.get("displayName", "")
-            response_payload = {
-                "message": "Vault assistant initialized.",
-                "membershipId": membership_id,
-                "membershipType": membership_type,
-                "userInfo": display_name
-            }
-            logging.info(
-                "Main entry: assistant initialized for user: %s", membership_id)
-            return response_payload, 200
-        elif vault_data_path:
-            response_payload = {
-                "message": "Vault assistant initialized with saved data.",
-                "vaultDataPath": vault_data_path,
-                "stub": "Loading from vault data path not yet implemented."
-            }
-            logging.info(
-                "Main entry: initialized with saved data path: %s", vault_data_path)
-            return response_payload, 200
-
     def list_dim_backups(self, membership_id: str) -> tuple[dict, int]:
         """List available DIM backups for a given membership ID."""
         logging.info("Listing DIM backups for user: %s", membership_id)

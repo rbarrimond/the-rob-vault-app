@@ -198,32 +198,6 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
 
 # --- Main Functionality Endpoints ---
 
-@app.route(route="", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
-def main(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Main entry point for the Vault assistant.
-    Accepts a POST request with a vault_data_path and processes the request using the stored session.
-    """
-    logging.info("[main] POST request received.")
-    try:
-        body = req.get_json()
-    except ValueError:
-        logging.error("[main] Invalid JSON body in request.")
-        return func.HttpResponse("Invalid JSON", status_code=400)
-    # Only extract vault_data_path from the body; do not extract access_token
-    vault_data_path = body.get("vault_data_path") if body else None
-    # Always pass None for access_token so assistant uses the stored session
-    result, status = assistant.main_entry(None, vault_data_path)
-    if "error" in result:
-        logging.error("[main] Error in main entry: %s", result["error"])
-        return func.HttpResponse(result["error"], status_code=status)
-    logging.info("[main] Successfully processed main entry.")
-    return func.HttpResponse(
-        json.dumps(result, indent=2),
-        mimetype="application/json"
-    )
-
-
 @app.route(route="vault", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def vault(req: func.HttpRequest) -> func.HttpResponse:
     """
