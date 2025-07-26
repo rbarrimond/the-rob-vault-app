@@ -72,22 +72,6 @@ paths:
           description: No refresh token found. Please re-authenticate.
         '500':
           description: Failed to refresh token
-  /:
-    post:
-      summary: Main entry point for Vault Assistant
-      operationId: mainEntry
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                vault_data_path:
-                  type: string
-      responses:
-        '200':
-          description: Assistant response
   /vault:
     get:
       summary: Get Destiny 2 vault inventory
