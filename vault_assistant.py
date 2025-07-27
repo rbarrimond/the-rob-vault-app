@@ -26,7 +26,6 @@ from helpers import (
     save_dim_backup_blob
 )
 
-
 class VaultAssistant:
     """Business logic for Destiny 2 Vault Assistant operations."""
 
