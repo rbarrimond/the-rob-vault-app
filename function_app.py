@@ -204,13 +204,22 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
     Returns the user's Destiny 2 vault inventory items.
     """
     logging.info("[vault] GET request received.")
+    try:
+        limit = req.params.get("limit")
+        offset = req.params.get("offset")
+        limit = int(limit) if limit is not None else None
+        offset = int(offset) if offset is not None else 0
+    except Exception:
+        return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
     inventory, status = assistant.get_vault()
     if inventory is None:
         logging.error(
             "[vault] Failed to get vault inventory. Status: %d", status)
         return func.HttpResponse("Failed to get vault inventory", status_code=status)
+    # Apply pagination
+    paged_inventory = inventory[offset:offset+limit] if limit is not None else inventory[offset:]
     logging.info("[vault] Successfully returned vault inventory.")
-    return func.HttpResponse(json.dumps(inventory, indent=2), mimetype="application/json")
+    return func.HttpResponse(json.dumps(paged_inventory, indent=2), mimetype="application/json")
 
 
 @app.route(route="characters", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
@@ -219,13 +228,29 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     Returns the user's Destiny 2 character equipment data.
     """
     logging.info("[characters] GET request received.")
+    try:
+        limit = req.params.get("limit")
+        offset = req.params.get("offset")
+        limit = int(limit) if limit is not None else None
+        offset = int(offset) if offset is not None else 0
+    except Exception:
+        return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
     equipment, status = assistant.get_characters()
     if equipment is None:
         logging.error(
             "[characters] Failed to get character equipment. Status: %d", status)
         return func.HttpResponse("Failed to get character equipment", status_code=status)
+    # Apply pagination per character
+    if isinstance(equipment, dict):
+        paged_equipment = {}
+        for char_id, char_data in equipment.items():
+            items = char_data.get("items", [])
+            paged_items = items[offset:offset+limit] if limit is not None else items[offset:]
+            paged_equipment[char_id] = {**char_data, "items": paged_items}
+    else:
+        paged_equipment = equipment
     logging.info("[characters] Successfully returned character equipment.")
-    return func.HttpResponse(json.dumps(equipment, indent=2), mimetype="application/json")
+    return func.HttpResponse(json.dumps(paged_equipment, indent=2), mimetype="application/json")
 
 
 

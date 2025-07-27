@@ -76,6 +76,21 @@ paths:
     get:
       summary: Get Destiny 2 vault inventory
       operationId: getVaultInventory
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Maximum number of items to return (pagination)
+        - in: query
+          name: offset
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Number of items to skip before starting to return results (pagination)
       responses:
         '200':
           description: Vault inventory returned
@@ -115,6 +130,21 @@ paths:
     get:
       summary: Get Destiny 2 character equipment
       operationId: getCharacterEquipment
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Maximum number of items to return per character (pagination)
+        - in: query
+          name: offset
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Number of items to skip before starting to return results per character (pagination)
       responses:
         '200':
           description: Character equipment returned
