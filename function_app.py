@@ -228,32 +228,37 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(equipment, indent=2), mimetype="application/json")
 
 
+
 @app.route(route="vault/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the decoded version of the user's Destiny 2 vault inventory.
+    Optional query param: includePerks (bool)
     """
     logging.info("[vault/decoded] GET request received.")
+    include_perks = req.params.get("includePerks", "false").lower() == "true"
     try:
-        result, status = assistant.decode_vault()
+        result, status = assistant.decode_vault(include_perks=include_perks)
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
     except Exception as e:
         logging.error("[vault/decoded] Failed to decode vault: %s", e)
         return func.HttpResponse("Failed to decode vault.", status_code=500)
 
 
+
 @app.route(route="characters/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the decoded version of the user's Destiny 2 character equipment.
+    Optional query param: includePerks (bool)
     """
     logging.info("[characters/decoded] GET request received.")
+    include_perks = req.params.get("includePerks", "false").lower() == "true"
     try:
-        result, status = assistant.decode_characters()
+        result, status = assistant.decode_characters(include_perks=include_perks)
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
     except Exception as e:
-        logging.error(
-            "[characters/decoded] Failed to decode character equipment: %s", e)
+        logging.error("[characters/decoded] Failed to decode character equipment: %s", e)
         return func.HttpResponse("Failed to decode character equipment.", status_code=500)
 
 

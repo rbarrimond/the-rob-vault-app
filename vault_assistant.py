@@ -136,7 +136,8 @@ class VaultAssistant:
         except ResourceExistsError:
             pass
         except AzureError as e:
-            logging.warning("[assistant] Azure Table error on create_table: %s", e)
+            logging.warning(
+                "[assistant] Azure Table error on create_table: %s", e)
         token_entity = {
             "PartitionKey": "AuthSession",
             "RowKey": "last",
@@ -340,13 +341,13 @@ class VaultAssistant:
         logging.info("Access token refreshed successfully.")
         return token_data, 200
 
-    def decode_vault(self) -> tuple[list, int]:
-        """Decode the vault inventory using manifest definitions."""
-        return self._decode_blob(source="vault"), 200
+    def decode_vault(self, include_perks: bool = False) -> tuple[list, int]:
+        """Decode the vault inventory using manifest definitions. Optionally include perks."""
+        return self._decode_blob(source="vault", include_perks=include_perks), 200
 
-    def decode_characters(self) -> tuple[list, int]:
-        """Decode the character equipment using manifest definitions."""
-        return self._decode_blob(source="characters"), 200
+    def decode_characters(self, include_perks: bool = False) -> tuple[list, int]:
+        """Decode the character equipment using manifest definitions. Optionally include perks."""
+        return self._decode_blob(source="characters", include_perks=include_perks), 200
 
     def get_session_token(self) -> tuple[dict, int]:
         """Return current access token and membership ID, wrapped for external use."""
@@ -365,7 +366,7 @@ class VaultAssistant:
         headers = {"X-API-Key": self.api_key}
         return get_manifest(headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
 
-    def _decode_blob(self, source: str = 'vault') -> list:
+    def _decode_blob(self, source: str = 'vault', include_perks: bool = False) -> list:
         """Decode and enrich inventory or character data using manifest definitions."""
         logging.info("Starting decode pass for source: %s", source)
         session = self.get_session()
@@ -380,12 +381,15 @@ class VaultAssistant:
             for item in items:
                 item_hash = str(item.get("itemHash"))
                 defn = definitions.get(item_hash, {})
-                decoded_items.append({
+                decoded = {
                     "name": defn.get("displayProperties", {}).get("name", "Unknown"),
                     "type": defn.get("itemTypeDisplayName", "Unknown"),
                     "itemHash": item.get("itemHash"),
                     "itemInstanceId": item.get("itemInstanceId"),
-                })
+                }
+                if include_perks:
+                    decoded["perks"] = self._extract_perks(defn, definitions)
+                decoded_items.append(decoded)
         elif isinstance(items, dict):  # Characters
             for char_id, char_data in items.items():
                 char_items = char_data.get("items", [])
@@ -393,18 +397,37 @@ class VaultAssistant:
                 for item in char_items:
                     item_hash = str(item.get("itemHash"))
                     defn = definitions.get(item_hash, {})
-                    enriched_items.append({
+                    decoded = {
                         "name": defn.get("displayProperties", {}).get("name", "Unknown"),
                         "type": defn.get("itemTypeDisplayName", "Unknown"),
                         "itemHash": item.get("itemHash"),
                         "itemInstanceId": item.get("itemInstanceId"),
-                    })
+                    }
+                    if include_perks:
+                        decoded["perks"] = self._extract_perks(defn, definitions)
+                    enriched_items.append(decoded)
                 decoded_items.append({
                     "characterId": char_id,
                     "items": enriched_items
                 })
         logging.info("Decode pass complete for source: %s", source)
         return decoded_items
+
+    def _extract_perks(self, defn, definitions):
+        """Extract perks from an item definition."""
+        perks = []
+        for socket in defn.get("sockets", {}).get("socketEntries", []):
+            plug_hash = socket.get("singleInitialItemHash")
+            if plug_hash:
+                plug_def = definitions.get(str(plug_hash), {})
+                if plug_def:
+                    perks.append({
+                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
+                        "description": plug_def.get("displayProperties", {}).get("description", ""),
+                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
+                        "plugItemHash": plug_hash
+                    })
+        return perks
 
     def save_object(self, mime_object) -> tuple[dict, int]:
         """
@@ -420,11 +443,198 @@ class VaultAssistant:
             logging.error("MIME object missing filename or content.")
             return {"error": "Missing filename or content in MIME object."}, 400
         try:
-            save_blob(self.storage_conn_str, self.blob_container, filename, content)
-            container_url = BlobServiceClient.from_connection_string(self.storage_conn_str).get_container_client(self.blob_container).url
+            save_blob(self.storage_conn_str,
+                      self.blob_container, filename, content)
+            container_url = BlobServiceClient.from_connection_string(
+                self.storage_conn_str).get_container_client(self.blob_container).url
             blob_url = f"{container_url}/{filename}"
             logging.info("Saved MIME object as blob: %s", blob_url)
             return {"message": "Object saved successfully.", "blob": filename, "url": blob_url}, 200
         except Exception as e:
             logging.error("Failed to save MIME object: %s", e)
             return {"error": f"Failed to save object: {e}"}, 500
+
+
+    def get_item_full_info(self, item_hash: str, item_instance_id: str = None) -> tuple[dict | None, int]:
+        """
+        Retrieve full information for an item, including perks, stats, and other properties.
+        If item_instance_id is provided, fetch instance-specific data (e.g., rolled perks, stats).
+        """
+        definitions = self._get_manifest_definitions()
+        item_def = definitions.get(item_hash)
+        if not item_def:
+            logging.error("Item hash %s not found in manifest.", item_hash)
+            return None, 404
+        item_info = self._build_item_base_info(item_def, item_hash, definitions)
+        if item_instance_id:
+            instance_info = self._build_item_instance_info(item_instance_id, definitions)
+            if instance_info:
+                item_info.update(instance_info)
+        return item_info, 200
+
+    def _build_item_base_info(self, item_def, item_hash, definitions):
+        info = {
+            "name": item_def.get("displayProperties", {}).get("name", "Unknown"),
+            "description": item_def.get("displayProperties", {}).get("description", ""),
+            "type": item_def.get("itemTypeDisplayName", "Unknown"),
+            "icon": item_def.get("displayProperties", {}).get("icon", None),
+            "tier": item_def.get("inventory", {}).get("tierTypeName", "Unknown"),
+            "itemHash": item_hash,
+            "itemType": item_def.get("itemType"),
+            "itemSubType": item_def.get("itemSubType"),
+            "itemCategoryHashes": item_def.get("itemCategoryHashes", []),
+            "itemTypeDisplayName": item_def.get("itemTypeDisplayName"),
+            "itemTypeAndTierDisplayName": item_def.get("itemTypeAndTierDisplayName"),
+            "sourceString": item_def.get("sourceString"),
+            "collectibleHash": item_def.get("collectibleHash"),
+        }
+
+        # Inventory/Stack Info
+        inventory = item_def.get("inventory", {})
+        info["maxStackSize"] = inventory.get("maxStackSize")
+        info["stackUniqueLabel"] = inventory.get("stackUniqueLabel")
+        info["transferStatus"] = inventory.get("transferStatus")
+        info["expirationTooltip"] = inventory.get("expirationTooltip")
+        info["isInstanceItem"] = inventory.get("isInstanceItem")
+        info["nonTransferrable"] = inventory.get("nonTransferrable")
+
+        # Masterwork/Mod Info (from sockets)
+        masterwork_info = None
+        mod_info = []
+        sockets_def = item_def.get("sockets", {}).get("socketEntries", [])
+        for socket in sockets_def:
+            plug_hash = socket.get("singleInitialItemHash")
+            if plug_hash:
+                plug_def = definitions.get(str(plug_hash), {})
+                # Check for masterwork
+                if plug_def.get("itemTypeDisplayName", "").lower().find("masterwork") != -1:
+                    masterwork_info = {
+                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
+                        "description": plug_def.get("displayProperties", {}).get("description", ""),
+                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
+                        "plugItemHash": plug_hash
+                    }
+                # Check for mods
+                if plug_def.get("itemTypeDisplayName", "").lower().find("mod") != -1:
+                    mod_info.append({
+                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
+                        "description": plug_def.get("displayProperties", {}).get("description", ""),
+                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
+                        "plugItemHash": plug_hash
+                    })
+        if masterwork_info:
+            info["masterwork"] = masterwork_info
+        if mod_info:
+            info["mods"] = mod_info
+        
+        # Seasonal/Power Cap
+        info["powerCapHash"] = item_def.get("quality", {}).get("powerCapHash")
+        info["seasonHash"] = item_def.get("seasonHash")
+        info["seasonalContent"] = item_def.get("seasonalContent")
+        info["quality"] = item_def.get("quality")
+        
+        # Stats
+        stats = {}
+        stats_def = item_def.get("stats", {}).get("stats", {})
+        for stat_hash, stat_obj in stats_def.items():
+            stat_def = definitions.get(stat_hash, {})
+            stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash)
+            stats[stat_name] = stat_obj.get("value")
+        if stats:
+            info["stats"] = stats
+        
+        # Perks (sockets)
+        sockets = []
+        socket_categories = item_def.get("sockets", {}).get("socketEntries", [])
+        for socket in socket_categories:
+            plug_hash = socket.get("singleInitialItemHash")
+            if plug_hash:
+                plug_def = definitions.get(str(plug_hash), {})
+                if plug_def:
+                    sockets.append({
+                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
+                        "description": plug_def.get("displayProperties", {}).get("description", ""),
+                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
+                        "plugItemHash": plug_hash
+                    })
+        if sockets:
+            info["perks"] = sockets
+        
+        return info
+
+    def _build_item_instance_info(self, item_instance_id, definitions):
+        session = self.get_session()
+        access_token = session["access_token"]
+        membership_id = session["membership_id"]
+        headers_auth = {
+            "Authorization": f"Bearer {access_token}",
+            "X-API-Key": self.api_key
+        }
+        # Try to get membership type
+        profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
+        profile_resp = retry_request(
+            requests.get, profile_url, headers=headers_auth, timeout=self.timeout)
+        if not profile_resp.ok:
+            return None
+        profile_data = profile_resp.json().get("Response", {})
+        if not profile_data.get("destinyMemberships"):
+            return None
+        membership_type = profile_data["destinyMemberships"][0].get("membershipType", "1")
+        # Fetch item instance data
+        instance_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/Item/{item_instance_id}/?components=300,302,304"
+        instance_resp = retry_request(
+            requests.get, instance_url, headers=headers_auth, timeout=self.timeout)
+        if not instance_resp.ok:
+            return None
+        instance_data = instance_resp.json().get("Response", {})
+        info = {}
+        # Instance stats
+        inst_stats = instance_data.get("itemStats", {}).get("stats", {})
+        if inst_stats:
+            stats_instance = {}
+            for stat_hash, stat_obj in inst_stats.items():
+                stat_def = definitions.get(str(stat_hash), {})
+                stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash)
+                stats_instance[stat_name] = stat_obj.get("value")
+            info["instanceStats"] = stats_instance
+        # Instance perks (sockets), masterwork, mods
+        inst_sockets = instance_data.get("sockets", {}).get("sockets", [])
+        perks_instance = []
+        masterwork_instance = None
+        mods_instance = []
+        for socket in inst_sockets:
+            plug_hash = socket.get("plugHash")
+            if plug_hash:
+                plug_def = definitions.get(str(plug_hash), {})
+                if plug_def:
+                    display_name = plug_def.get("itemTypeDisplayName", "").lower()
+                    # Perks
+                    perks_instance.append({
+                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
+                        "description": plug_def.get("displayProperties", {}).get("description", ""),
+                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
+                        "plugItemHash": plug_hash
+                    })
+                    # Masterwork
+                    if "masterwork" in display_name:
+                        masterwork_instance = {
+                            "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
+                            "description": plug_def.get("displayProperties", {}).get("description", ""),
+                            "icon": plug_def.get("displayProperties", {}).get("icon", None),
+                            "plugItemHash": plug_hash
+                        }
+                    # Mods
+                    if "mod" in display_name:
+                        mods_instance.append({
+                            "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
+                            "description": plug_def.get("displayProperties", {}).get("description", ""),
+                            "icon": plug_def.get("displayProperties", {}).get("icon", None),
+                            "plugItemHash": plug_hash
+                        })
+        if perks_instance:
+            info["instancePerks"] = perks_instance
+        if masterwork_instance:
+            info["instanceMasterwork"] = masterwork_instance
+        if mods_instance:
+            info["instanceMods"] = mods_instance
+        return info

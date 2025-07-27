@@ -85,6 +85,13 @@ paths:
     get:
       summary: Decode Destiny 2 vault inventory
       operationId: decodeVaultInventory
+      parameters:
+        - in: query
+          name: includePerks
+          required: false
+          schema:
+            type: boolean
+          description: If true, include perks for each item
       responses:
         '200':
           description: Decoded vault inventory
@@ -103,6 +110,13 @@ paths:
     get:
       summary: Decode Destiny 2 character equipment
       operationId: decodeCharacterEquipment
+      parameters:
+        - in: query
+          name: includePerks
+          required: false
+          schema:
+            type: boolean
+          description: If true, include perks for each item
       responses:
         '200':
           description: Decoded character equipment
