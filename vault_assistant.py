@@ -385,12 +385,13 @@ class VaultAssistant:
         items = json.loads(blob_data)
         definitions = self._get_manifest_definitions()
         decoded_items = []
+        from helpers import resolve_manifest_hash
         if isinstance(items, list):  # Vault
             # Apply offset and limit for pagination
             paged_items = items[offset:offset+limit] if limit is not None else items[offset:]
             for item in paged_items:
                 item_hash = normalize_item_hash(item.get("itemHash"))
-                defn = definitions.get(item_hash, {})
+                defn, _ = resolve_manifest_hash(item_hash, definitions)
                 decoded = {
                     "name": defn.get("displayProperties", {}).get("name", "Unknown"),
                     "type": defn.get("itemTypeDisplayName", "Unknown"),
@@ -408,7 +409,7 @@ class VaultAssistant:
                 enriched_items = []
                 for item in paged_char_items:
                     item_hash = normalize_item_hash(item.get("itemHash"))
-                    defn = definitions.get(item_hash, {})
+                    defn, _ = resolve_manifest_hash(item_hash, definitions)
                     decoded = {
                         "name": defn.get("displayProperties", {}).get("name", "Unknown"),
                         "type": defn.get("itemTypeDisplayName", "Unknown"),
@@ -427,12 +428,13 @@ class VaultAssistant:
 
     def _extract_perks(self, defn, definitions):
         """Extract perks from an item definition."""
+        from helpers import resolve_manifest_hash
         perks = []
         for socket in defn.get("sockets", {}).get("socketEntries", []):
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
                 norm_plug_hash = normalize_item_hash(plug_hash)
-                plug_def = definitions.get(norm_plug_hash, {})
+                plug_def, _ = resolve_manifest_hash(norm_plug_hash, definitions)
                 if plug_def:
                     perks.append({
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
@@ -487,6 +489,7 @@ class VaultAssistant:
         return item_info, 200
 
     def _build_item_base_info(self, item_def, item_hash, definitions):
+        from helpers import resolve_manifest_hash
         info = {
             "name": item_def.get("displayProperties", {}).get("name", "Unknown"),
             "description": item_def.get("displayProperties", {}).get("description", ""),
@@ -519,9 +522,9 @@ class VaultAssistant:
         for socket in sockets_def:
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
-                plug_def = definitions.get(str(plug_hash), {})
+                plug_def, _ = resolve_manifest_hash(str(plug_hash), definitions)
                 # Check for masterwork
-                if plug_def.get("itemTypeDisplayName", "").lower().find("masterwork") != -1:
+                if plug_def and plug_def.get("itemTypeDisplayName", "").lower().find("masterwork") != -1:
                     masterwork_info = {
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
                         "description": plug_def.get("displayProperties", {}).get("description", ""),
@@ -529,7 +532,7 @@ class VaultAssistant:
                         "plugItemHash": plug_hash
                     }
                 # Check for mods
-                if plug_def.get("itemTypeDisplayName", "").lower().find("mod") != -1:
+                if plug_def and plug_def.get("itemTypeDisplayName", "").lower().find("mod") != -1:
                     mod_info.append({
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
                         "description": plug_def.get("displayProperties", {}).get("description", ""),
@@ -551,8 +554,8 @@ class VaultAssistant:
         stats = {}
         stats_def = item_def.get("stats", {}).get("stats", {})
         for stat_hash, stat_obj in stats_def.items():
-            stat_def = definitions.get(stat_hash, {})
-            stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash)
+            stat_def, _ = resolve_manifest_hash(stat_hash, definitions)
+            stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
             stats[stat_name] = stat_obj.get("value")
         if stats:
             info["stats"] = stats
@@ -563,7 +566,7 @@ class VaultAssistant:
         for socket in socket_categories:
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
-                plug_def = definitions.get(str(plug_hash), {})
+                plug_def, _ = resolve_manifest_hash(str(plug_hash), definitions)
                 if plug_def:
                     sockets.append({
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
@@ -577,6 +580,7 @@ class VaultAssistant:
         return info
 
     def _build_item_instance_info(self, item_instance_id, definitions):
+        from helpers import resolve_manifest_hash
         session = self.get_session()
         access_token = session["access_token"]
         membership_id = session["membership_id"]
@@ -607,8 +611,8 @@ class VaultAssistant:
         if inst_stats:
             stats_instance = {}
             for stat_hash, stat_obj in inst_stats.items():
-                stat_def = definitions.get(str(stat_hash), {})
-                stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash)
+                stat_def, _ = resolve_manifest_hash(str(stat_hash), definitions)
+                stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
                 stats_instance[stat_name] = stat_obj.get("value")
             info["instanceStats"] = stats_instance
         # Instance perks (sockets), masterwork, mods
@@ -619,7 +623,7 @@ class VaultAssistant:
         for socket in inst_sockets:
             plug_hash = socket.get("plugHash")
             if plug_hash:
-                plug_def = definitions.get(str(plug_hash), {})
+                plug_def, _ = resolve_manifest_hash(str(plug_hash), definitions)
                 if plug_def:
                     display_name = plug_def.get("itemTypeDisplayName", "").lower()
                     # Perks
