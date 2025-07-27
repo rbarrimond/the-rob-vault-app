@@ -92,6 +92,20 @@ paths:
           schema:
             type: boolean
           description: If true, include perks for each item
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Maximum number of items to return (pagination)
+        - in: query
+          name: offset
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Number of items to skip before starting to return results (pagination)
       responses:
         '200':
           description: Decoded vault inventory
@@ -117,6 +131,20 @@ paths:
           schema:
             type: boolean
           description: If true, include perks for each item
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Maximum number of items to return per character (pagination)
+        - in: query
+          name: offset
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Number of items to skip before starting to return results per character (pagination)
       responses:
         '200':
           description: Decoded character equipment

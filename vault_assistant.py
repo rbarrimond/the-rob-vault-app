@@ -341,13 +341,13 @@ class VaultAssistant:
         logging.info("Access token refreshed successfully.")
         return token_data, 200
 
-    def decode_vault(self, include_perks: bool = False) -> tuple[list, int]:
-        """Decode the vault inventory using manifest definitions. Optionally include perks."""
-        return self._decode_blob(source="vault", include_perks=include_perks), 200
+    def decode_vault(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
+        """Decode the vault inventory using manifest definitions. Optionally include perks. Supports pagination."""
+        return self._decode_blob(source="vault", include_perks=include_perks, limit=limit, offset=offset), 200
 
-    def decode_characters(self, include_perks: bool = False) -> tuple[list, int]:
-        """Decode the character equipment using manifest definitions. Optionally include perks."""
-        return self._decode_blob(source="characters", include_perks=include_perks), 200
+    def decode_characters(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
+        """Decode the character equipment using manifest definitions. Optionally include perks. Supports pagination."""
+        return self._decode_blob(source="characters", include_perks=include_perks, limit=limit, offset=offset), 200
 
     def get_session_token(self) -> tuple[dict, int]:
         """Return current access token and membership ID, wrapped for external use."""
@@ -366,8 +366,8 @@ class VaultAssistant:
         headers = {"X-API-Key": self.api_key}
         return get_manifest(headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
 
-    def _decode_blob(self, source: str = 'vault', include_perks: bool = False) -> list:
-        """Decode and enrich inventory or character data using manifest definitions."""
+    def _decode_blob(self, source: str = 'vault', include_perks: bool = False, limit: int = None, offset: int = 0) -> list:
+        """Decode and enrich inventory or character data using manifest definitions. Supports pagination."""
         logging.info("Starting decode pass for source: %s", source)
         session = self.get_session()
         membership_id = session["membership_id"]
@@ -378,7 +378,9 @@ class VaultAssistant:
         definitions = self._get_manifest_definitions()
         decoded_items = []
         if isinstance(items, list):  # Vault
-            for item in items:
+            # Apply offset and limit for pagination
+            paged_items = items[offset:offset+limit] if limit is not None else items[offset:]
+            for item in paged_items:
                 item_hash = str(item.get("itemHash"))
                 defn = definitions.get(item_hash, {})
                 decoded = {
@@ -393,8 +395,10 @@ class VaultAssistant:
         elif isinstance(items, dict):  # Characters
             for char_id, char_data in items.items():
                 char_items = char_data.get("items", [])
+                # Apply offset and limit for pagination per character
+                paged_char_items = char_items[offset:offset+limit] if limit is not None else char_items[offset:]
                 enriched_items = []
-                for item in char_items:
+                for item in paged_char_items:
                     item_hash = str(item.get("itemHash"))
                     defn = definitions.get(item_hash, {})
                     decoded = {

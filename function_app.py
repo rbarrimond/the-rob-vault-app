@@ -238,7 +238,14 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("[vault/decoded] GET request received.")
     include_perks = req.params.get("includePerks", "false").lower() == "true"
     try:
-        result, status = assistant.decode_vault(include_perks=include_perks)
+        limit = req.params.get("limit")
+        offset = req.params.get("offset")
+        limit = int(limit) if limit is not None else None
+        offset = int(offset) if offset is not None else 0
+    except Exception:
+        return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
+    try:
+        result, status = assistant.decode_vault(include_perks=include_perks, limit=limit, offset=offset)
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
     except Exception as e:
         logging.error("[vault/decoded] Failed to decode vault: %s", e)
@@ -255,7 +262,14 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("[characters/decoded] GET request received.")
     include_perks = req.params.get("includePerks", "false").lower() == "true"
     try:
-        result, status = assistant.decode_characters(include_perks=include_perks)
+        limit = req.params.get("limit")
+        offset = req.params.get("offset")
+        limit = int(limit) if limit is not None else None
+        offset = int(offset) if offset is not None else 0
+    except Exception:
+        return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
+    try:
+        result, status = assistant.decode_characters(include_perks=include_perks, limit=limit, offset=offset)
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
     except Exception as e:
         logging.error("[characters/decoded] Failed to decode character equipment: %s", e)
