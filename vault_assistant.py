@@ -289,7 +289,6 @@ class VaultAssistant:
 
     def get_manifest_item(self, item_hash, definition=None) -> tuple[dict, int]:
         """Resolve a Destiny 2 item hash against manifest definitions."""
-        from helpers import normalize_item_hash
         norm_hash = normalize_item_hash(item_hash)
         definition, def_type = resolve_manifest_hash(norm_hash, self.manifest_cache.get("definitions", {}))
         if not definition:
@@ -385,7 +384,6 @@ class VaultAssistant:
         items = json.loads(blob_data)
         definitions = self._get_manifest_definitions()
         decoded_items = []
-        from helpers import resolve_manifest_hash
         if isinstance(items, list):  # Vault
             # Apply offset and limit for pagination
             paged_items = items[offset:offset+limit] if limit is not None else items[offset:]
@@ -428,7 +426,6 @@ class VaultAssistant:
 
     def _extract_perks(self, defn, definitions):
         """Extract perks from an item definition."""
-        from helpers import resolve_manifest_hash
         perks = []
         for socket in defn.get("sockets", {}).get("socketEntries", []):
             plug_hash = socket.get("singleInitialItemHash")
@@ -489,7 +486,16 @@ class VaultAssistant:
         return item_info, 200
 
     def _build_item_base_info(self, item_def, item_hash, definitions):
-        from helpers import resolve_manifest_hash
+        """
+        Build base information for a Destiny 2 item using its manifest definition.
+        Includes display properties, type, tier, inventory info, masterwork/mods, stats, and perks.
+        Args:
+            item_def (dict): The manifest definition for the item.
+            item_hash (str|int): The normalized item hash.
+            definitions (dict): The manifest definitions cache.
+        Returns:
+            dict: Dictionary of item base information.
+        """
         info = {
             "name": item_def.get("displayProperties", {}).get("name", "Unknown"),
             "description": item_def.get("displayProperties", {}).get("description", ""),
@@ -580,7 +586,15 @@ class VaultAssistant:
         return info
 
     def _build_item_instance_info(self, item_instance_id, definitions):
-        from helpers import resolve_manifest_hash
+        """
+        Build instance-specific information for a Destiny 2 item, such as rolled perks, stats, masterwork, and mods.
+        Fetches instance data from the Bungie API using the item_instance_id.
+        Args:
+            item_instance_id (str): The Destiny 2 item instance ID.
+            definitions (dict): The manifest definitions cache.
+        Returns:
+            dict | None: Dictionary of instance-specific item info, or None if not found.
+        """
         session = self.get_session()
         access_token = session["access_token"]
         membership_id = session["membership_id"]
