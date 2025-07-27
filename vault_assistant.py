@@ -282,18 +282,13 @@ class VaultAssistant:
             "Character equipment fetched and saved for user: %s", membership_id)
         return equipment, 200
 
-    def get_manifest_item(self, item_hash: str) -> tuple[dict | None, int]:
-        """Return manifest definition for a given item hash."""
-        headers = {"X-API-Key": self.api_key}
-        logging.info("Fetching manifest item for hash: %s", item_hash)
-        item_hash = str(item_hash)  # Ensure item_hash is a string
-        definitions = get_manifest(
-            headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
-        definition = definitions.get(item_hash)
+    def get_manifest_item(self, item_hash, definition=None):
+        from .helpers import resolve_manifest_hash
+
+        item_hash = str(item_hash)
+        definition, def_type = resolve_manifest_hash(item_hash, self.manifest_cache.get("definitions", {}))
         if not definition:
-            logging.error("Item hash %s not found in manifest.", item_hash)
-            return None, 404
-        logging.info("Manifest item found for hash: %s", item_hash)
+            return {"error": "Item not found"}, 404
         return definition, 200
 
     def save_dim_backup(self, membership_id: str, dim_json_str: str) -> tuple[dict, int]:

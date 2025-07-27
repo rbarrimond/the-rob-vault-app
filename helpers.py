@@ -63,6 +63,7 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
     if "definitions" in manifest_cache:
         logging.info("Manifest definitions found in cache.")
         return manifest_cache["definitions"]
+
     index_resp = retry_request_func(
         requests.get,
         f"{api_base}/Destiny2/Manifest/",
@@ -72,24 +73,50 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
     if not index_resp.ok:
         logging.error("Failed to fetch manifest index: status %d", index_resp.status_code)
         return {}
+
     index_data = index_resp.json().get("Response", {})
-    en_content_path = index_data.get("jsonWorldComponentContentPaths", {}).get("en", {}).get("DestinyInventoryItemDefinition")
-    if not en_content_path:
-        logging.error("Manifest path not found in manifest index response")
-        return {}
-    manifest_url = f"https://www.bungie.net{en_content_path}"
-    manifest_resp = retry_request_func(
-        requests.get,
-        manifest_url,
-        timeout=timeout
-    )
-    if not manifest_resp.ok:
-        logging.error("Failed to fetch manifest content: status %d", manifest_resp.status_code)
-        return {}
-    definitions = manifest_resp.json()
-    manifest_cache["definitions"] = definitions
-    logging.info("Manifest definitions loaded and cached.")
-    return definitions
+    en_paths = index_data.get("jsonWorldComponentContentPaths", {}).get("en", {})
+    def_types = [
+        "DestinyInventoryItemDefinition",
+        "DestinyPlugItemDefinition",
+        "DestinyStatDefinition",
+        "DestinySocketTypeDefinition",
+        "DestinySocketCategoryDefinition"
+    ]
+    manifest = {}
+    for def_type in def_types:
+        path = en_paths.get(def_type)
+        if not path:
+            continue
+        url = f"https://www.bungie.net{path}"
+        resp = retry_request_func(requests.get, url, timeout=timeout)
+        if resp.ok:
+            manifest[def_type] = resp.json()
+        else:
+            logging.warning("Failed to fetch %s: status %d", def_type, resp.status_code)
+
+    manifest_cache["definitions"] = manifest
+    logging.info("All manifest definitions loaded and cached.")
+    return manifest
+
+
+# Attempt to resolve a hash against multiple manifest definition types.
+def resolve_manifest_hash(item_hash, manifest_cache, definition_types=None):
+    """Attempt to resolve a hash against multiple manifest definition types."""
+    if not definition_types:
+        definition_types = [
+            "DestinyInventoryItemDefinition",
+            "DestinyPlugItemDefinition",
+            "DestinyStatDefinition",
+            "DestinySocketTypeDefinition",
+            "DestinySocketCategoryDefinition"
+        ]
+    item_hash = str(item_hash)
+    for def_type in definition_types:
+        defs = manifest_cache.get(def_type, {})
+        if defs and item_hash in defs:
+            return defs[item_hash], def_type
+    return None, None
 
 # Save DIM backup and metadata
 def save_dim_backup_blob(connection_string, table_name, membership_id, dim_json_str, timestamp=None):
