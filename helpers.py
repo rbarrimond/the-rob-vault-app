@@ -6,7 +6,19 @@ import requests
 
 from azure.storage.blob import BlobServiceClient
 from azure.data.tables import TableServiceClient
+
 from azure.core.exceptions import ResourceExistsError
+
+# Normalize Destiny 2 item hash to unsigned 32-bit string
+def normalize_item_hash(item_hash):
+    """Convert item_hash to unsigned 32-bit int and string for manifest lookup."""
+    try:
+        # Accept int or str
+        h = int(item_hash)
+        h &= 0xFFFFFFFF
+        return str(h)
+    except Exception:
+        return str(item_hash)
 
 # Retry logic for API requests with exponential backoff
 def retry_request(method, url, **kwargs):

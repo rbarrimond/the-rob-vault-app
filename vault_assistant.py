@@ -23,7 +23,9 @@ from helpers import (
     get_manifest,
     retry_request,
     save_blob,
-    save_dim_backup_blob
+    save_dim_backup_blob,
+    resolve_manifest_hash,
+    normalize_item_hash
 )
 
 class VaultAssistant:
@@ -35,6 +37,9 @@ class VaultAssistant:
         self.storage_conn_str = storage_conn_str
         self.table_name = table_name
         self.blob_container = blob_container
+        # Ensure manifest_cache has 'definitions' key for lookups
+        if 'definitions' not in manifest_cache:
+            manifest_cache['definitions'] = {}
         self.manifest_cache = manifest_cache
         self.api_base = api_base
         self.timeout = timeout
@@ -282,11 +287,19 @@ class VaultAssistant:
             "Character equipment fetched and saved for user: %s", membership_id)
         return equipment, 200
 
-    def get_manifest_item(self, item_hash, definition=None):
-        from .helpers import resolve_manifest_hash
-
-        item_hash = str(item_hash)
-        definition, def_type = resolve_manifest_hash(item_hash, self.manifest_cache.get("definitions", {}))
+    def get_manifest_item(self, item_hash, definition=None) -> tuple[dict, int]:
+        """Resolve a Destiny 2 item hash against manifest definitions."""
+        from helpers import normalize_item_hash
+        norm_hash = normalize_item_hash(item_hash)
+        definition, def_type = resolve_manifest_hash(norm_hash, self.manifest_cache.get("definitions", {}))
+        if not definition:
+            # Try fallback: sometimes hashes are passed as signed ints in string form
+            try:
+                alt_hash = normalize_item_hash(int(norm_hash))
+                if alt_hash != norm_hash:
+                    definition, def_type = resolve_manifest_hash(alt_hash, self.manifest_cache.get("definitions", {}))
+            except Exception:
+                pass
         if not definition:
             return {"error": "Item not found"}, 404
         return definition, 200
@@ -376,7 +389,7 @@ class VaultAssistant:
             # Apply offset and limit for pagination
             paged_items = items[offset:offset+limit] if limit is not None else items[offset:]
             for item in paged_items:
-                item_hash = str(item.get("itemHash"))
+                item_hash = normalize_item_hash(item.get("itemHash"))
                 defn = definitions.get(item_hash, {})
                 decoded = {
                     "name": defn.get("displayProperties", {}).get("name", "Unknown"),
@@ -394,7 +407,7 @@ class VaultAssistant:
                 paged_char_items = char_items[offset:offset+limit] if limit is not None else char_items[offset:]
                 enriched_items = []
                 for item in paged_char_items:
-                    item_hash = str(item.get("itemHash"))
+                    item_hash = normalize_item_hash(item.get("itemHash"))
                     defn = definitions.get(item_hash, {})
                     decoded = {
                         "name": defn.get("displayProperties", {}).get("name", "Unknown"),
@@ -418,7 +431,8 @@ class VaultAssistant:
         for socket in defn.get("sockets", {}).get("socketEntries", []):
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
-                plug_def = definitions.get(str(plug_hash), {})
+                norm_plug_hash = normalize_item_hash(plug_hash)
+                plug_def = definitions.get(norm_plug_hash, {})
                 if plug_def:
                     perks.append({
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
@@ -460,12 +474,12 @@ class VaultAssistant:
         If item_instance_id is provided, fetch instance-specific data (e.g., rolled perks, stats).
         """
         definitions = self._get_manifest_definitions()
-        item_hash = str(item_hash)  # Ensure item_hash is a string
-        item_def = definitions.get(item_hash)
+        norm_hash = normalize_item_hash(item_hash)
+        item_def = definitions.get(norm_hash)
         if not item_def:
-            logging.error("Item hash %s not found in manifest.", item_hash)
+            logging.error("Item hash %s not found in manifest.", norm_hash)
             return None, 404
-        item_info = self._build_item_base_info(item_def, item_hash, definitions)
+        item_info = self._build_item_base_info(item_def, norm_hash, definitions)
         if item_instance_id:
             instance_info = self._build_item_instance_info(item_instance_id, definitions)
             if instance_info:
