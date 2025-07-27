@@ -287,6 +287,7 @@ class VaultAssistant:
         """Return manifest definition for a given item hash."""
         headers = {"X-API-Key": self.api_key}
         logging.info("Fetching manifest item for hash: %s", item_hash)
+        item_hash = str(item_hash)  # Ensure item_hash is a string
         definitions = get_manifest(
             headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
         definition = definitions.get(item_hash)
@@ -465,6 +466,7 @@ class VaultAssistant:
         If item_instance_id is provided, fetch instance-specific data (e.g., rolled perks, stats).
         """
         definitions = self._get_manifest_definitions()
+        item_hash = str(item_hash)  # Ensure item_hash is a string
         item_def = definitions.get(item_hash)
         if not item_def:
             logging.error("Item hash %s not found in manifest.", item_hash)
