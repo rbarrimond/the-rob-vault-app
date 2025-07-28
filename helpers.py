@@ -96,16 +96,26 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
         "DestinySocketCategoryDefinition"
     ]
     manifest = {}
+
     for def_type in def_types:
         path = en_paths.get(def_type)
         if not path:
+            logging.error("Manifest index missing path for %s", def_type)
             continue
         url = f"https://www.bungie.net{path}"
         resp = retry_request_func(requests.get, url, timeout=timeout)
         if resp.ok:
             manifest[def_type] = resp.json()
+            logging.info("Loaded manifest for %s (entries: %d)", def_type, len(manifest[def_type]))
         else:
             logging.warning("Failed to fetch %s: status %d", def_type, resp.status_code)
+
+    # Log which definition types were found and which were missing
+    found_types = list(manifest.keys())
+    missing_types = [t for t in def_types if t not in found_types]
+    logging.info("Manifest definition types loaded: %s", found_types)
+    if missing_types:
+        logging.warning("Manifest definition types missing: %s", missing_types)
 
     manifest_cache["definitions"] = manifest
     logging.info("All manifest definitions loaded and cached.")
