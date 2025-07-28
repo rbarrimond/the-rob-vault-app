@@ -16,7 +16,27 @@ from azure.core.exceptions import ResourceNotFoundError, AzureError, ResourceExi
 from helpers import retry_request
 
 class BungieSessionManager:
+    """
+    Handles OAuth authentication, token refresh, and session management for Destiny 2 Vault Assistant.
+
+    Responsibilities:
+    - Exchange OAuth code for access/refresh tokens
+    - Refresh tokens when expired
+    - Store/retrieve session info in Azure Table Storage
+    - Provide current session (access token, membership ID)
+    """
+
     def __init__(self, api_key: str, storage_conn_str: str, table_name: str, api_base: str, timeout: int):
+        """
+        Initialize BungieSessionManager with configuration and dependencies.
+
+        Args:
+            api_key (str): Bungie API key.
+            storage_conn_str (str): Azure Storage connection string.
+            table_name (str): Azure Table name for session storage.
+            api_base (str): Bungie API base URL.
+            timeout (int): Request timeout in seconds.
+        """
         self.api_key = api_key
         self.storage_conn_str = storage_conn_str
         self.table_name = table_name
@@ -25,6 +45,12 @@ class BungieSessionManager:
         self._token_expiry_margin = 60  # seconds before expiry to refresh
 
     def _get_token_entity(self) -> dict | None:
+        """
+        Retrieve the token entity from Azure Table Storage.
+
+        Returns:
+            dict | None: Token entity if found, else None.
+        """
         table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
         table_client = table_service.get_table_client(self.table_name)
         try:
@@ -37,6 +63,12 @@ class BungieSessionManager:
             return None
 
     def _is_token_expired(self) -> bool:
+        """
+        Check if the current token is expired or near expiry.
+
+        Returns:
+            bool: True if expired or near expiry, False otherwise.
+        """
         entity = self._get_token_entity()
         if not entity:
             return True
@@ -50,6 +82,12 @@ class BungieSessionManager:
         return elapsed > (expires_in - self._token_expiry_margin)
 
     def ensure_token_valid(self) -> dict | None:
+        """
+        Ensure the token is valid, refreshing if expired.
+
+        Returns:
+            dict | None: Valid token entity, or None if not found.
+        """
         entity = self._get_token_entity()
         if not entity:
             return None
@@ -69,6 +107,14 @@ class BungieSessionManager:
         return entity
 
     def exchange_code_for_token(self, code: str) -> dict:
+        """
+        Exchange OAuth code for access/refresh token, store in Table Storage, and return token data.
+
+        Args:
+            code (str): OAuth authorization code.
+        Returns:
+            dict: Token data from Bungie API.
+        """
         token_url = "https://www.bungie.net/platform/app/oauth/token/"
         payload = {
             "grant_type": "authorization_code",
@@ -123,6 +169,12 @@ class BungieSessionManager:
         return token_data
 
     def get_session(self) -> dict:
+        """
+        Retrieve stored session info including access token and membership ID.
+
+        Returns:
+            dict: Session info with access token and membership ID.
+        """
         entity = self.ensure_token_valid()
         if not entity:
             return {"access_token": None, "membership_id": None}
@@ -132,6 +184,14 @@ class BungieSessionManager:
         }
 
     def refresh_token(self, refresh_token_val: str) -> tuple[dict, int]:
+        """
+        Refresh access token using the stored refresh token.
+
+        Args:
+            refresh_token_val (str): The refresh token value.
+        Returns:
+            tuple: (token_data, status_code)
+        """
         logging.info("Refreshing access token using refresh token.")
         token_url = "https://www.bungie.net/platform/app/oauth/token/"
         payload = {
