@@ -72,9 +72,10 @@ def save_table_entity(connection_string, table_name, entity):
 # Fetch and cache Destiny 2 manifest definitions
 def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout):
     """Fetch and cache Destiny 2 manifest definitions from the Bungie API."""
-    if "definitions" in manifest_cache:
+    defs = manifest_cache.get("definitions")
+    if defs:
         logging.info("Manifest definitions found in cache.")
-        return manifest_cache["definitions"]
+        return defs
 
     index_resp = retry_request_func(
         requests.get,
@@ -104,14 +105,14 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
             continue
         url = f"https://www.bungie.net{path}"
         resp = retry_request_func(requests.get, url, timeout=timeout)
-        if resp.ok:
-            manifest[def_type] = resp.json()
-            logging.info("Loaded manifest for %s (entries: %d)", def_type, len(manifest[def_type]))
-        else:
+        if not resp.ok:
             logging.warning("Failed to fetch %s: status %d", def_type, resp.status_code)
+            continue
+        resp_json = resp.json()
+        manifest[def_type] = resp_json.get("Response", resp_json)
+        logging.info("Loaded manifest for %s (entries: %d)", def_type, len(manifest[def_type]))
 
-    # Log which definition types were found and which were missing
-    found_types = list(manifest.keys())
+    found_types = list(manifest)
     missing_types = [t for t in def_types if t not in found_types]
     logging.info("Manifest definition types loaded: %s", found_types)
     if missing_types:

@@ -22,10 +22,11 @@ from azure.data.tables import TableServiceClient
 from vault_assistant import VaultAssistant
 
 # Configure logging
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "DEBUG"),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
+# logging.basicConfig(
+#     level=os.getenv("LOG_LEVEL", "DEBUG"),
+#     format="%(asctime)s %(levelname)s %(name)s %(message)s"
+# )
+logger = logging.getLogger("azure")
 
 app = func.FunctionApp()
 
