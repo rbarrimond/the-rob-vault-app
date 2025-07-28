@@ -17,8 +17,6 @@ from datetime import datetime
 
 import requests
 from azure.storage.blob import BlobServiceClient
-from azure.data.tables import TableServiceClient
-from azure.core.exceptions import ResourceNotFoundError, AzureError, ResourceExistsError
 from helpers import (
     get_manifest,
     retry_request,
@@ -27,148 +25,86 @@ from helpers import (
     resolve_manifest_hash,
     normalize_item_hash
 )
+from bungie_session_manager import BungieSessionManager
 
 class VaultAssistant:
-    """Business logic for Destiny 2 Vault Assistant operations."""
+    """
+    Business logic for Destiny 2 Vault Assistant operations.
+
+    This class manages Destiny 2 API interactions, manifest lookups, backup operations,
+    and delegates session/authentication logic to BungieSessionManager.
+    """
 
     def __init__(self, api_key: str, storage_conn_str: str, table_name: str, blob_container: str, manifest_cache: dict, api_base: str, timeout: int):
-        """Initialize VaultAssistant with configuration and dependencies."""
+        """
+        Initialize VaultAssistant with configuration and dependencies.
+
+        Args:
+            api_key (str): Bungie API key.
+            storage_conn_str (str): Azure Storage connection string.
+            table_name (str): Azure Table name for session storage.
+            blob_container (str): Azure Blob container name.
+            manifest_cache (dict): Manifest cache for Destiny 2 definitions.
+            api_base (str): Bungie API base URL.
+            timeout (int): Request timeout in seconds.
+        """
         self.api_key = api_key
         self.storage_conn_str = storage_conn_str
         self.table_name = table_name
         self.blob_container = blob_container
-        # Ensure manifest_cache has 'definitions' key for lookups
         if 'definitions' not in manifest_cache:
             manifest_cache['definitions'] = {}
         self.manifest_cache = manifest_cache
         self.api_base = api_base
         self.timeout = timeout
-        self._token_expiry_margin = 60  # seconds before expiry to refresh
+        # Use BungieSessionManager for all session/auth logic
+        self.session_manager = BungieSessionManager(
+            api_key=api_key,
+            storage_conn_str=storage_conn_str,
+            table_name=table_name,
+            api_base=api_base,
+            timeout=timeout
+        )
 
-    def _get_token_entity(self) -> dict | None:
-        table_service = TableServiceClient.from_connection_string(
-            self.storage_conn_str)
-        table_client = table_service.get_table_client(self.table_name)
-        try:
-            entity = table_client.get_entity(
-                partition_key="AuthSession", row_key="last")
-            return entity
-        except ResourceNotFoundError:
-            return None
-        except AzureError as e:
-            logging.error("Azure Table error in _get_token_entity: %s", e)
-            return None
-
-    def _is_token_expired(self) -> bool:
-        entity = self._get_token_entity()
-        if not entity:
-            return True
-        expires_in = int(entity.get("ExpiresIn", "3600"))
-        # Assume we store the time when token was issued
-        issued_at = entity.get("IssuedAt")
-        if not issued_at:
-            return True
-        issued_at_dt = datetime.strptime(issued_at, "%Y-%m-%dT%H:%M:%S")
-        now = datetime.utcnow()
-        elapsed = (now - issued_at_dt).total_seconds()
-        # Refresh if within margin of expiry
-        return elapsed > (expires_in - self._token_expiry_margin)
-
-    def _ensure_token_valid(self) -> dict | None:
-        entity = self._get_token_entity()
-        if not entity:
-            return None
-        if self._is_token_expired():
-            refresh_token_val = entity.get("RefreshToken")
-            if refresh_token_val:
-                token_data, _ = self.refresh_token(refresh_token_val)
-                # Update entity with new token info
-                entity.update({
-                    "AccessToken": token_data.get("access_token", ""),
-                    "RefreshToken": token_data.get("refresh_token", ""),
-                    "ExpiresIn": str(token_data.get("expires_in", "3600")),
-                    "IssuedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-                })
-                table_service = TableServiceClient.from_connection_string(
-                    self.storage_conn_str)
-                table_client = table_service.get_table_client(self.table_name)
-                table_client.upsert_entity(entity=entity)
-        return entity
-
+    # Session/auth methods are now delegated to BungieSessionManager
     def exchange_code_for_token(self, code: str) -> dict:
-        """Exchange OAuth code for access/refresh token, store in Table Storage, and return token data."""
-        token_url = "https://www.bungie.net/platform/app/oauth/token/"
-        payload = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "client_id": os.environ.get("BUNGIE_CLIENT_ID"),
-            "client_secret": os.environ.get("BUNGIE_CLIENT_SECRET"),
-            "redirect_uri": os.environ.get("BUNGIE_REDIRECT_URI"),
-        }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        response = retry_request(
-            requests.post, token_url, data=payload, headers=headers, timeout=self.timeout)
-        response.raise_for_status()
-        token_data = response.json()
-        # Fetch membershipId
-        membership_id_val = ""
-        try:
-            headers_profile = {
-                "Authorization": f"Bearer {token_data.get('access_token', '')}",
-                "X-API-Key": self.api_key
-            }
-            profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
-            profile_resp = retry_request(
-                requests.get, profile_url, headers=headers_profile, timeout=self.timeout)
-            if profile_resp.ok:
-                profile_data = profile_resp.json().get("Response", {})
-                if profile_data.get("destinyMemberships"):
-                    membership_id_val = profile_data["destinyMemberships"][0].get(
-                        "membershipId", "")
-        except requests.RequestException as e:
-            logging.warning(
-                "[assistant] Could not retrieve membershipId due to network error: %s", e)
-        except (KeyError, ValueError) as e:
-            logging.warning(
-                "[assistant] Could not parse membershipId: %s", e)
-        # Store in Table Storage
-        table_service = TableServiceClient.from_connection_string(
-            self.storage_conn_str)
-        table_client = table_service.get_table_client(self.table_name)
-        try:
-            table_client.create_table()
-        except ResourceExistsError:
-            pass
-        except AzureError as e:
-            logging.warning(
-                "[assistant] Azure Table error on create_table: %s", e)
-        token_entity = {
-            "PartitionKey": "AuthSession",
-            "RowKey": "last",
-            "AccessToken": token_data.get("access_token", ""),
-            "RefreshToken": token_data.get("refresh_token", ""),
-            "ExpiresIn": str(token_data.get("expires_in", "3600")),
-            "membershipId": membership_id_val,
-            "IssuedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-        }
-        table_client.upsert_entity(entity=token_entity)
-        logging.info(
-            "[assistant] Token data stored in table storage for session.")
-        return token_data
+        """
+        Exchange OAuth code for access/refresh token, store in Table Storage, and return token data.
+
+        Args:
+            code (str): OAuth authorization code.
+        Returns:
+            dict: Token data from Bungie API.
+        """
+        return self.session_manager.exchange_code_for_token(code)
 
     def get_session(self) -> dict:
-        """Retrieve stored session info including access token and membership ID."""
-        logging.info("Retrieving stored session.")
-        entity = self._ensure_token_valid()
-        if not entity:
-            return {"access_token": None, "membership_id": None}
-        return {
-            "access_token": entity["AccessToken"],
-            "membership_id": entity["membershipId"]
-        }
+        """
+        Retrieve stored session info including access token and membership ID.
+
+        Returns:
+            dict: Session info with access token and membership ID.
+        """
+        return self.session_manager.get_session()
+
+    def refresh_token(self, refresh_token_val: str) -> tuple[dict, int]:
+        """
+        Refresh access token using the stored refresh token.
+
+        Args:
+            refresh_token_val (str): The refresh token value.
+        Returns:
+            tuple: (token_data, status_code)
+        """
+        return self.session_manager.refresh_token(refresh_token_val)
 
     def initialize_user(self) -> tuple[dict | None, int]:
-        """Authenticate user, load manifest, and fetch Destiny 2 character summary using stored session."""
+        """
+        Authenticate user, load manifest, and fetch Destiny 2 character summary using stored session.
+
+        Returns:
+            tuple: (user summary dict, status_code)
+        """
         session = self.get_session()
         access_token = session["access_token"]
         headers = {
@@ -219,7 +155,12 @@ class VaultAssistant:
         }, 200
 
     def get_vault(self) -> tuple[list, int] | tuple[None, int]:
-        """Fetch user's Destiny 2 vault inventory and save to blob storage using stored session."""
+        """
+        Fetch user's Destiny 2 vault inventory and save to blob storage using stored session.
+
+        Returns:
+            tuple: (inventory list, status_code)
+        """
         session = self.get_session()
         access_token = session["access_token"]
         headers = {
@@ -254,7 +195,12 @@ class VaultAssistant:
         return inventory, 200
 
     def get_characters(self) -> tuple[dict, int] | tuple[None, int]:
-        """Fetch user's Destiny 2 character equipment and save to blob storage using stored session."""
+        """
+        Fetch user's Destiny 2 character equipment and save to blob storage using stored session.
+
+        Returns:
+            tuple: (equipment dict, status_code)
+        """
         session = self.get_session()
         access_token = session["access_token"]
         headers = {
@@ -288,7 +234,15 @@ class VaultAssistant:
         return equipment, 200
 
     def get_manifest_item(self, item_hash, definition=None) -> tuple[dict, int]:
-        """Resolve a Destiny 2 item hash against manifest definitions."""
+        """
+        Resolve a Destiny 2 item hash against manifest definitions.
+
+        Args:
+            item_hash: Item hash to resolve.
+            definition: Optional manifest definition type.
+        Returns:
+            tuple: (definition dict, status_code)
+        """
         norm_hash = normalize_item_hash(item_hash)
         definition, def_type = resolve_manifest_hash(norm_hash, self.manifest_cache.get("definitions", {}))
         if not definition:
@@ -304,7 +258,15 @@ class VaultAssistant:
         return definition, 200
 
     def save_dim_backup(self, membership_id: str, dim_json_str: str) -> tuple[dict, int]:
-        """Save a DIM backup and its metadata."""
+        """
+        Save a DIM backup and its metadata.
+
+        Args:
+            membership_id (str): Destiny 2 membership ID.
+            dim_json_str (str): DIM backup JSON string.
+        Returns:
+            tuple: (result dict, status_code)
+        """
         logging.info("Saving DIM backup for user: %s", membership_id)
         timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
         blob_name, hash_key, timestamp = save_dim_backup_blob(
@@ -318,7 +280,14 @@ class VaultAssistant:
         }, 200
 
     def list_dim_backups(self, membership_id: str) -> tuple[dict, int]:
-        """List available DIM backups for a given membership ID."""
+        """
+        List available DIM backups for a given membership ID.
+
+        Args:
+            membership_id (str): Destiny 2 membership ID.
+        Returns:
+            tuple: (backups dict, status_code)
+        """
         logging.info("Listing DIM backups for user: %s", membership_id)
         blob_service = BlobServiceClient.from_connection_string(
             self.storage_conn_str)
@@ -330,34 +299,41 @@ class VaultAssistant:
                      len(blob_names), membership_id)
         return {"backups": blob_names}, 200
 
-    def refresh_token(self, refresh_token_val: str) -> tuple[dict, int]:
-        """Refresh access token using the stored refresh token."""
-        logging.info("Refreshing access token using refresh token.")
-        token_url = "https://www.bungie.net/platform/app/oauth/token/"
-        payload = {
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token_val,
-            "client_id": os.environ.get("BUNGIE_CLIENT_ID"),
-            "client_secret": os.environ.get("BUNGIE_CLIENT_SECRET"),
-        }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        response = retry_request(
-            requests.post, token_url, data=payload, headers=headers, timeout=self.timeout)
-        response.raise_for_status()
-        token_data = response.json()
-        logging.info("Access token refreshed successfully.")
-        return token_data, 200
+    # ...existing code...
 
     def decode_vault(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
-        """Decode the vault inventory using manifest definitions. Optionally include perks. Supports pagination."""
+        """
+        Decode the vault inventory using manifest definitions. Optionally include perks. Supports pagination.
+
+        Args:
+            include_perks (bool): If True, include perks for each item.
+            limit (int): Max number of items to return.
+            offset (int): Number of items to skip.
+        Returns:
+            tuple: (decoded items list, status_code)
+        """
         return self._decode_blob(source="vault", include_perks=include_perks, limit=limit, offset=offset), 200
 
     def decode_characters(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
-        """Decode the character equipment using manifest definitions. Optionally include perks. Supports pagination."""
+        """
+        Decode the character equipment using manifest definitions. Optionally include perks. Supports pagination.
+
+        Args:
+            include_perks (bool): If True, include perks for each item.
+            limit (int): Max number of items to return per character.
+            offset (int): Number of items to skip per character.
+        Returns:
+            tuple: (decoded items list, status_code)
+        """
         return self._decode_blob(source="characters", include_perks=include_perks, limit=limit, offset=offset), 200
 
     def get_session_token(self) -> tuple[dict, int]:
-        """Return current access token and membership ID, wrapped for external use."""
+        """
+        Return current access token and membership ID, wrapped for external use.
+
+        Returns:
+            tuple: (session dict, status_code)
+        """
         session = self.get_session()
         return {
             "access_token": session["access_token"],
@@ -365,16 +341,36 @@ class VaultAssistant:
         }, 200
 
     def _get_blob_container(self) -> BlobServiceClient:
-        """Return the blob container client for the main blob container."""
+        """
+        Return the blob container client for the main blob container.
+
+        Returns:
+            BlobServiceClient: The blob container client.
+        """
         return BlobServiceClient.from_connection_string(self.storage_conn_str).get_container_client(self.blob_container)
 
     def _get_manifest_definitions(self) -> dict:
-        """Fetch and return manifest definitions, using cache if available."""
+        """
+        Fetch and return manifest definitions, using cache if available.
+
+        Returns:
+            dict: Manifest definitions.
+        """
         headers = {"X-API-Key": self.api_key}
         return get_manifest(headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
 
     def _decode_blob(self, source: str = 'vault', include_perks: bool = False, limit: int = None, offset: int = 0) -> list:
-        """Decode and enrich inventory or character data using manifest definitions. Supports pagination."""
+        """
+        Decode and enrich inventory or character data using manifest definitions. Supports pagination.
+
+        Args:
+            source (str): 'vault' or 'characters'.
+            include_perks (bool): If True, include perks for each item.
+            limit (int): Max number of items to return.
+            offset (int): Number of items to skip.
+        Returns:
+            list: Decoded items.
+        """
         logging.info("Starting decode pass for source: %s", source)
         session = self.get_session()
         membership_id = session["membership_id"]
@@ -425,7 +421,15 @@ class VaultAssistant:
         return decoded_items
 
     def _extract_perks(self, defn, definitions):
-        """Extract perks from an item definition."""
+        """
+        Extract perks from an item definition.
+
+        Args:
+            defn (dict): Item manifest definition.
+            definitions (dict): Manifest definitions cache.
+        Returns:
+            list: List of perks dicts.
+        """
         perks = []
         for socket in defn.get("sockets", {}).get("socketEntries", []):
             plug_hash = socket.get("singleInitialItemHash")
@@ -444,8 +448,14 @@ class VaultAssistant:
     def save_object(self, mime_object) -> tuple[dict, int]:
         """
         Save a MIME object (file-like) to Azure Blob Storage using save_blob helper.
+
         The MIME object should have 'filename', 'content_type', and 'content' attributes.
         Returns a dict with blob name and URL on success.
+
+        Args:
+            mime_object: Object with filename, content_type, and content attributes.
+        Returns:
+            tuple: (result dict, status_code)
         """
         logging.info("Saving MIME object to blob storage.")
         filename = getattr(mime_object, 'filename', None)
@@ -471,6 +481,12 @@ class VaultAssistant:
         """
         Retrieve full information for an item, including perks, stats, and other properties.
         If item_instance_id is provided, fetch instance-specific data (e.g., rolled perks, stats).
+
+        Args:
+            item_hash (str): Destiny 2 item hash.
+            item_instance_id (str, optional): Destiny 2 item instance ID.
+        Returns:
+            tuple: (item info dict, status_code)
         """
         definitions = self._get_manifest_definitions()
         norm_hash = normalize_item_hash(item_hash)
@@ -489,6 +505,7 @@ class VaultAssistant:
         """
         Build base information for a Destiny 2 item using its manifest definition.
         Includes display properties, type, tier, inventory info, masterwork/mods, stats, and perks.
+
         Args:
             item_def (dict): The manifest definition for the item.
             item_hash (str|int): The normalized item hash.
@@ -589,6 +606,7 @@ class VaultAssistant:
         """
         Build instance-specific information for a Destiny 2 item, such as rolled perks, stats, masterwork, and mods.
         Fetches instance data from the Bungie API using the item_instance_id.
+
         Args:
             item_instance_id (str): The Destiny 2 item instance ID.
             definitions (dict): The manifest definitions cache.
