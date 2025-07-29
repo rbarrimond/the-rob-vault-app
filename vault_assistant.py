@@ -10,7 +10,6 @@ This module provides the VaultAssistant class, which encapsulates business logic
 
 All API interactions, manifest lookups, and backup operations are managed through this class.
 """
-import os
 import json
 import logging
 from datetime import datetime
