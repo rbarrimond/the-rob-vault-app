@@ -72,11 +72,6 @@ def save_table_entity(connection_string, table_name, entity):
 # Fetch and cache Destiny 2 manifest definitions
 def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout):
     """Fetch and cache Destiny 2 manifest definitions from the Bungie API."""
-    defs = manifest_cache.get("definitions")
-    if defs:
-        logging.info("Manifest definitions found in cache.")
-        return defs
-
     index_resp = retry_request_func(
         requests.get,
         f"{api_base}/Destiny2/Manifest/",
@@ -88,6 +83,16 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
         return {}
 
     index_data = index_resp.json().get("Response", {})
+    manifest_version = index_data.get("version")
+    cached_version = manifest_cache.get("version")
+    cached_defs = manifest_cache.get("definitions")
+
+    # If version matches cache, return cached definitions
+    if cached_defs and cached_version == manifest_version:
+        logging.info("Manifest definitions found in cache (version: %s).", manifest_version)
+        return {"definitions": cached_defs, "version": manifest_version}
+
+    # Otherwise, reload manifest definitions
     en_paths = index_data.get("jsonWorldComponentContentPaths", {}).get("en", {})
     def_types = [
         "DestinyInventoryItemDefinition",
@@ -119,8 +124,9 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
         logging.warning("Manifest definition types missing: %s", missing_types)
 
     manifest_cache["definitions"] = manifest
-    logging.info("All manifest definitions loaded and cached.")
-    return manifest
+    manifest_cache["version"] = manifest_version
+    logging.info("All manifest definitions loaded and cached (version: %s).", manifest_version)
+    return {"definitions": manifest, "version": manifest_version}
 
 
 # Attempt to resolve a hash against multiple manifest definition types.
