@@ -25,6 +25,7 @@ Vault Sentinel can:
 Vault Sentinel applies these rules when assessing armor and weapons:
 
 #### **Armor (Armor 3.0):**
+
 - **Low-Tier:**  
   - Any stat at 0, or **total stat sum < 65**.
   - Multiple stats below 10 also flag low-tier gear.
@@ -40,6 +41,7 @@ Vault Sentinel applies these rules when assessing armor and weapons:
   - Synergy between stats (e.g., Mobility/Recovery for Hunter, Resilience/Discipline for Warlock/Titan) is highly valued.
 
 #### **Weapons:**
+
 - **Low-Tier:** Major stats (Range, Stability, Handling, Reload, etc.) in the bottom 15% for archetype; stat totals significantly below community average; missing access to top-tier perk pools.
 - **High-Tier:** Stat totals at or above archetype average; access to god roll or enhanced perks; matches community standards for “best in slot.”
 - **General:** Range or Stability < 25 on a pulse rifle likely marks a low-tier drop (unless an archetype outlier). Hidden stats (e.g., Aim Assist) are evaluated when relevant.
