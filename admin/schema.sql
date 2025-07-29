@@ -62,7 +62,6 @@ CREATE TABLE dbo.ItemPerks (
     perk_name NVARCHAR(100),
     description NVARCHAR(255),
     icon NVARCHAR(255),
-    is_active BIT NOT NULL DEFAULT 0,
     PRIMARY KEY (item_id, perk_hash),
     FOREIGN KEY (item_id) REFERENCES dbo.Items(item_id)
 );
