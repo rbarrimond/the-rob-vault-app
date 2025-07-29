@@ -1,5 +1,20 @@
--- Destiny 2 Vault & Character Data Schema
--- For Azure SQL Database (Serverless)
+
+-- Drop indexes if they exist
+DROP INDEX IF EXISTS IX_Characters_UserId ON dbo.Characters;
+DROP INDEX IF EXISTS IX_Items_CharacterId ON dbo.Items;
+DROP INDEX IF EXISTS IX_ItemStats_ItemId ON dbo.ItemStats;
+DROP INDEX IF EXISTS IX_ItemPerks_ItemId ON dbo.ItemPerks;
+DROP INDEX IF EXISTS IX_ItemMods_ItemId ON dbo.ItemMods;
+DROP INDEX IF EXISTS IX_ItemMasterwork_ItemId ON dbo.ItemMasterwork;
+
+-- Drop tables if they exist
+DROP TABLE IF EXISTS dbo.ItemMasterwork;
+DROP TABLE IF EXISTS dbo.ItemMods;
+DROP TABLE IF EXISTS dbo.ItemPerks;
+DROP TABLE IF EXISTS dbo.ItemStats;
+DROP TABLE IF EXISTS dbo.Items;
+DROP TABLE IF EXISTS dbo.Characters;
+DROP TABLE IF EXISTS dbo.Users;
 
 CREATE TABLE dbo.Users (
     user_id BIGINT PRIMARY KEY,
@@ -47,6 +62,7 @@ CREATE TABLE dbo.ItemPerks (
     perk_name NVARCHAR(100),
     description NVARCHAR(255),
     icon NVARCHAR(255),
+    is_active BIT NOT NULL DEFAULT 0,
     PRIMARY KEY (item_id, perk_hash),
     FOREIGN KEY (item_id) REFERENCES dbo.Items(item_id)
 );
