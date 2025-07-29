@@ -94,17 +94,12 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
 
     # Otherwise, reload manifest definitions
     en_paths = index_data.get("jsonWorldComponentContentPaths", {}).get("en", {})
-    def_types = [
-        "DestinyInventoryItemDefinition",
-        "DestinyPlugItemDefinition",
-        "DestinyStatDefinition",
-        "DestinySocketTypeDefinition",
-        "DestinySocketCategoryDefinition"
-    ]
+
+    # Dynamically load all available definition types from the manifest index
+    def_types = list(en_paths.keys())
     manifest = {}
 
-    for def_type in def_types:
-        path = en_paths.get(def_type)
+    for def_type, path in en_paths.items():
         if not path:
             logging.error("Manifest index missing path for %s", def_type)
             continue
@@ -132,14 +127,9 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
 # Attempt to resolve a hash against multiple manifest definition types.
 def resolve_manifest_hash(item_hash, manifest_cache, definition_types=None):
     """Attempt to resolve a hash against multiple manifest definition types."""
+    # Use all loaded definition types if not provided
     if not definition_types:
-        definition_types = [
-            "DestinyInventoryItemDefinition",
-            "DestinyPlugItemDefinition",
-            "DestinyStatDefinition",
-            "DestinySocketTypeDefinition",
-            "DestinySocketCategoryDefinition"
-        ]
+        definition_types = list(manifest_cache.keys())
     item_hash = str(item_hash)
     for def_type in definition_types:
         defs = manifest_cache.get(def_type, {})

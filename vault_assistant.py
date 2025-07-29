@@ -377,7 +377,8 @@ class VaultAssistant:
         container = self._get_blob_container()
         blob_data = container.download_blob(blob_name).readall()
         items = json.loads(blob_data)
-        definitions = self._get_manifest_definitions()
+        manifest = self._get_manifest_definitions()
+        definitions = manifest["definitions"] if isinstance(manifest, dict) and "definitions" in manifest else manifest
         decoded_items = []
         if isinstance(items, list):  # Vault
             # Apply offset and limit for pagination
@@ -385,14 +386,24 @@ class VaultAssistant:
             for item in paged_items:
                 item_hash = normalize_item_hash(item.get("itemHash"))
                 defn, _ = resolve_manifest_hash(item_hash, definitions)
-                decoded = {
-                    "name": defn.get("displayProperties", {}).get("name", "Unknown"),
-                    "type": defn.get("itemTypeDisplayName", "Unknown"),
-                    "itemHash": item.get("itemHash"),
-                    "itemInstanceId": item.get("itemInstanceId"),
-                }
-                if include_perks:
-                    decoded["perks"] = self._extract_perks(defn, definitions)
+                if defn is None:
+                    logging.warning("Item hash %s not found in manifest definitions.", item_hash)
+                    decoded = {
+                        "name": "Unknown",
+                        "type": "Unknown",
+                        "itemHash": item.get("itemHash"),
+                        "itemInstanceId": item.get("itemInstanceId"),
+                        "manifestMissing": True
+                    }
+                else:
+                    decoded = {
+                        "name": defn.get("displayProperties", {}).get("name", "Unknown"),
+                        "type": defn.get("itemTypeDisplayName", "Unknown"),
+                        "itemHash": item.get("itemHash"),
+                        "itemInstanceId": item.get("itemInstanceId"),
+                    }
+                    if include_perks:
+                        decoded["perks"] = self._extract_perks(defn, definitions)
                 decoded_items.append(decoded)
         elif isinstance(items, dict):  # Characters
             for char_id, char_data in items.items():
@@ -403,14 +414,24 @@ class VaultAssistant:
                 for item in paged_char_items:
                     item_hash = normalize_item_hash(item.get("itemHash"))
                     defn, _ = resolve_manifest_hash(item_hash, definitions)
-                    decoded = {
-                        "name": defn.get("displayProperties", {}).get("name", "Unknown"),
-                        "type": defn.get("itemTypeDisplayName", "Unknown"),
-                        "itemHash": item.get("itemHash"),
-                        "itemInstanceId": item.get("itemInstanceId"),
-                    }
-                    if include_perks:
-                        decoded["perks"] = self._extract_perks(defn, definitions)
+                    if defn is None:
+                        logging.warning("Item hash %s not found in manifest definitions.", item_hash)
+                        decoded = {
+                            "name": "Unknown",
+                            "type": "Unknown",
+                            "itemHash": item.get("itemHash"),
+                            "itemInstanceId": item.get("itemInstanceId"),
+                            "manifestMissing": True
+                        }
+                    else:
+                        decoded = {
+                            "name": defn.get("displayProperties", {}).get("name", "Unknown"),
+                            "type": defn.get("itemTypeDisplayName", "Unknown"),
+                            "itemHash": item.get("itemHash"),
+                            "itemInstanceId": item.get("itemInstanceId"),
+                        }
+                        if include_perks:
+                            decoded["perks"] = self._extract_perks(defn, definitions)
                     enriched_items.append(decoded)
                 decoded_items.append({
                     "characterId": char_id,
