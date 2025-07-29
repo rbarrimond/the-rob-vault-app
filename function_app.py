@@ -73,7 +73,7 @@ def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
                 "vms": mem_info.vms,  # Virtual Memory Size in bytes
             },
             "env": {
-                "LOG_LEVEL": logging.getLogger().getEffectiveLevel(),
+                "LOG_LEVEL": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
                 "BUNGIE_API_KEY": bool(os.getenv("BUNGIE_API_KEY")),
                 "AZURE_STORAGE_CONNECTION_STRING": bool(os.getenv("AZURE_STORAGE_CONNECTION_STRING")),
             }
