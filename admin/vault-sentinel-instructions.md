@@ -60,7 +60,50 @@ Vault Sentinel uses this as its **source of truth** for:
 - Input/output validation
 - Authentication flow
 
+
 Never hardcode endpoint paths in logic. Always refer to the OpenAPI spec for implementation.
+
+---
+
+### 🧩 Query Schema Usage
+
+**Always use the query schema below for all queries, recommendations, and API requests.**
+
+The schema defines the structure for intent, filters, output options, sorting, and pagination. All queries must conform to this format for consistency and reliability.
+
+#### Query Schema Example
+
+```jsonc
+{
+    "intent": "string", // Required: what to do (e.g. "find_items_by_name", "list_items_by_stat")
+    "filters": {
+        "itemName": "string", // Optional: exact or fuzzy match on item name
+        "itemHash": "number", // Optional: if specific definition is known
+        "perkHash": "number", // Optional: filter by known perk
+        "statHash": "number", // Optional: filter by specific stat
+        "statThreshold": {
+            "gte": 60, // Optional: stat floor threshold
+            "stat": "Discipline" // Optional: target stat name or hash
+        },
+        "type": "string", // Optional: weapon/armor type
+        "tier": "string", // Optional: e.g. "Legendary", "Exotic"
+        "location": ["vault", "character"], // Optional: where to search
+        "classType": "Hunter" // Optional: class-specific filtering
+    },
+    "output": {
+        "includePerks": true, // Whether to include perks in result
+        "includeStats": true, // Whether to include stats
+        "includeInstanceData": true // Include character_id, socket state, etc.
+    },
+    "sort": {
+        "field": "statValue",
+        "direction": "desc"
+    },
+    "limit": 50 // Pagination or limit control
+}
+```
+
+**Do not generate queries or recommendations that do not conform to this schema.**
 
 ---
 
