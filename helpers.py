@@ -57,6 +57,20 @@ def save_blob(connection_string, container_name, blob_name, data):
     container.upload_blob(blob_name, data, overwrite=True)
     logging.info("Saved blob: %s/%s", container_name, blob_name)
 
+# Load data from Azure Blob Storage
+def load_blob(connection_string, container_name, blob_name):
+    """Load data from Azure Blob Storage in the specified container and blob name."""
+    blob_service = BlobServiceClient.from_connection_string(connection_string)
+    container = blob_service.get_container_client(container_name)
+    try:
+        blob_client = container.get_blob_client(blob_name)
+        data = blob_client.download_blob().readall()
+        logging.info("Loaded blob: %s/%s", container_name, blob_name)
+        return data
+    except Exception as e:
+        logging.error("Failed to load blob %s/%s: %s", container_name, blob_name, e)
+        return None
+
 # Save entity to Azure Table Storage
 def save_table_entity(connection_string, table_name, entity):
     """Save or upsert an entity to Azure Table Storage."""

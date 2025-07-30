@@ -186,11 +186,6 @@ paths:
       operationId: getManifestItemDefinition
       parameters:
         - in: query
-          name: definition
-          required: true
-          schema:
-            type: string
-        - in: query
           name: hash
           required: true
           schema:

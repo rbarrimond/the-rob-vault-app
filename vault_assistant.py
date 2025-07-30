@@ -19,6 +19,7 @@ from azure.storage.blob import BlobServiceClient
 from helpers import (
     get_manifest,
     retry_request,
+    load_blob,
     save_blob,
     save_dim_backup_blob,
     resolve_manifest_hash,
@@ -51,12 +52,9 @@ class VaultAssistant:
         self.storage_conn_str = storage_conn_str
         self.table_name = table_name
         self.blob_container = blob_container
-        if 'definitions' not in manifest_cache:
-            manifest_cache['definitions'] = {}
-        self.manifest_cache = manifest_cache
         self.api_base = api_base
         self.timeout = timeout
-        # Use BungieSessionManager for all session/auth logic
+        self.manifest_cache = manifest_cache or {}
         self.session_manager = BungieSessionManager(
             api_key=api_key,
             storage_conn_str=storage_conn_str,
@@ -126,8 +124,9 @@ class VaultAssistant:
         membership_id = membership["membershipId"]
         membership_type = membership["membershipType"]
         # Confirm manifest is loaded
-        get_manifest(headers, self.manifest_cache,
-                     self.api_base, retry_request, self.timeout)
+        get_manifest(headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
+        save_blob(self.storage_conn_str, self.blob_container,
+                  f"{membership_id}-manifest.json", json.dumps(self.manifest_cache))
         # Get character list
         characters_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=200"
         char_resp = retry_request(
@@ -168,25 +167,21 @@ class VaultAssistant:
         }
         profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
         logging.info("Fetching vault for user.")
-        profile_resp = retry_request(
-            requests.get, profile_url, headers=headers, timeout=self.timeout)
+        profile_resp = retry_request(requests.get, profile_url, headers=headers, timeout=self.timeout)
         if not profile_resp.ok:
-            logging.error("Failed to get membership: status %d",
-                          profile_resp.status_code)
+            logging.error("Failed to get membership: status %d", profile_resp.status_code)
             return None, profile_resp.status_code
         profile_data = profile_resp.json()["Response"]
         membership = profile_data["destinyMemberships"][0]
         membership_id = membership["membershipId"]
         membership_type = membership["membershipType"]
         inventory_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=102"
-        inv_resp = retry_request(
-            requests.get, inventory_url, headers=headers, timeout=self.timeout)
+        inv_resp = retry_request(requests.get, inventory_url, headers=headers, timeout=self.timeout)
         if not inv_resp.ok:
             logging.error(
                 "Failed to get vault inventory: status %d", inv_resp.status_code)
             return None, inv_resp.status_code
-        inventory = inv_resp.json(
-        )["Response"]["profileInventory"]["data"]["items"]
+        inventory = inv_resp.json()["Response"]["profileInventory"]["data"]["items"]
         save_blob(self.storage_conn_str, self.blob_container,
                   f"{membership_id}.json", json.dumps(inventory))
         logging.info(

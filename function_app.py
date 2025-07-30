@@ -306,26 +306,21 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
 def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the manifest definition for a given Destiny 2 item.
-    Requires 'definition' and 'hash' query parameters.
+    Requires 'hash' query parameter.
     """
     logging.info("[manifest/item] GET request received.")
-    definition = req.params.get("definition")
     hash_val = req.params.get("hash")
-    if not definition or not hash_val:
-        logging.error(
-            "[manifest/item] Missing 'definition' or 'hash' in request.")
-        return func.HttpResponse("Missing 'definition' or 'hash' query parameter.", status_code=400)
+    if not hash_val:
+        logging.error("[manifest/item] Missing 'hash' in request.")
+        return func.HttpResponse("Missing 'hash' query parameter.", status_code=400)
     try:
         hash_str = str(hash_val)
-        # Optionally, validate hash is integer
         int(hash_val)
     except Exception:
         return func.HttpResponse("'hash' must be an integer.", status_code=400)
-    # The assistant expects item_hash as string
     definition_data, status = assistant.get_manifest_item(hash_str)
     if definition_data is None:
-        logging.error(
-            "[manifest/item] Item not found in manifest. Status: %d", status)
+        logging.error("[manifest/item] Item not found in manifest. Status: %d", status)
         return func.HttpResponse("Item not found in manifest", status_code=status)
     logging.info("[manifest/item] Successfully returned manifest item.")
     return func.HttpResponse(json.dumps(definition_data, indent=2), mimetype="application/json")
