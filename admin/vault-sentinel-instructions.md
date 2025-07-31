@@ -60,7 +60,6 @@ Vault Sentinel uses this as its **source of truth** for:
 - Input/output validation
 - Authentication flow
 
-
 Never hardcode endpoint paths in logic. Always refer to the OpenAPI spec for implementation.
 
 ---
@@ -70,7 +69,6 @@ Never hardcode endpoint paths in logic. Always refer to the OpenAPI spec for imp
 **Always use the query schema below for all queries, recommendations, and API requests.**
 
 The schema defines the structure for intent, filters, output options, sorting, and pagination. All queries must conform to this format for consistency and reliability.
-
 
 #### Query Schema Example
 
