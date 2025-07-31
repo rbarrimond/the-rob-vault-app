@@ -1,6 +1,6 @@
 {
     "intent": "string", // Required: what to do (e.g. "find_items_by_name", "list_items_by_stat")
-    "filters": {
+    "filters": { // Required: object specifying filters
         "itemName": "string", // Optional: exact or fuzzy match on item name
         "itemHash": "number", // Optional: if specific definition is known
         "perkHash": "number", // Optional: filter by known perk
@@ -16,15 +16,15 @@
             "character"
         ], // Optional: where to search
         "classType": "Hunter" // Optional: class-specific filtering
+    }, 
+    "output": { // Required: object specifying output fields
+        "includePerks": true, // Required: whether to include perks in result
+        "includeStats": true, // Required: whether to include stats
+        "includeInstanceData": true // Required: include character_id, socket state, etc.
     },
-    "output": {
-        "includePerks": true, // Whether to include perks in result
-        "includeStats": true, // Whether to include stats
-        "includeInstanceData": true // Include character_id, socket state, etc.
+    "sort": { // Required: object specifying sort order
+        "field": "statValue", // Required
+        "direction": "desc" // Required
     },
-    "sort": {
-        "field": "statValue",
-        "direction": "desc"
-    },
-    "limit": 50 // Pagination or limit control
+    "limit": 50 // Required: pagination or limit control
 }

@@ -71,11 +71,12 @@ Never hardcode endpoint paths in logic. Always refer to the OpenAPI spec for imp
 
 The schema defines the structure for intent, filters, output options, sorting, and pagination. All queries must conform to this format for consistency and reliability.
 
+
 #### Query Schema Example
 
 ```jsonc
 {
-    "intent": "string", // Required: what to do (e.g. "find_items_by_name", "list_items_by_stat")
+    "intent": "string", // Required: what to do (see supported intents below)
     "filters": {
         "itemName": "string", // Optional: exact or fuzzy match on item name
         "itemHash": "number", // Optional: if specific definition is known
@@ -103,7 +104,30 @@ The schema defines the structure for intent, filters, output options, sorting, a
 }
 ```
 
-**Do not generate queries or recommendations that do not conform to this schema.**
+**Supported Intents for Vault Sentinel and the Database Agent:**
+
+The following `intent` values are supported and should be used for all queries and API requests. These intents are mapped by the custom GPT and agent to SQL queries using the backend schema:
+
+- `list_items_by_stat`: List items filtered by stat value, stat name, thresholds, etc.
+- `find_items_by_name`: Find items by exact or fuzzy name match.
+- `list_items_by_perk`: List items that have a specific perk.
+- `list_items_by_type`: List items by type (e.g., armor, weapon).
+- `list_items_by_tier`: List items by tier (e.g., Legendary, Exotic).
+- `list_items_by_location`: List items by location (vault, character).
+- `list_items_by_class`: List items by class type (Hunter, Warlock, Titan).
+- `list_items_by_mod`: List items with a specific mod.
+- `list_items_by_masterwork`: List items with a specific masterwork.
+- `list_items_by_socket`: List items with a specific socket or plug.
+- `list_items_by_stat_threshold`: List items meeting a stat threshold.
+- `get_item_details`: Get details for a specific item.
+- `list_characters`: List all characters for a user.
+- `list_vault_items`: List all items in the vault.
+- `list_dim_backups`: List available DIM backups.
+- `get_character_equipment`: Get equipment for a specific character.
+
+Other intents may be added as needed, but only those that can be mapped to SQL queries using the schema are supported. Intents requiring external logic (e.g., recommendations, loadout generation) are out of scope for the database agent and should be handled by other components of Vault Sentinel.
+
+**Do not generate queries or recommendations that do not conform to this schema or use unsupported intents.**
 
 ---
 
