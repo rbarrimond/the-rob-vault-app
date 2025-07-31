@@ -294,6 +294,54 @@ paths:
                   error:
                     type: string
                     example: "Failed to save object: <error message>"
+
+  /query:
+    post:
+      summary: Send a query to the Vault Sentinel DB Agent
+      description: |
+        Accepts a JSON query conforming to the Vault Sentinel schema and returns the agent's response.
+      operationId: queryAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                intent:
+                  type: string
+                  description: Action to perform (e.g. "find_items_by_name", "list_items_by_stat")
+                filters:
+                  type: object
+                  description: Query filters (see schema)
+                output:
+                  type: object
+                  description: Output options
+                sort:
+                  type: object
+                  description: Sorting options
+                limit:
+                  type: integer
+                  description: Pagination or limit control
+              required:
+                - intent
+                - filters
+                - output
+                - sort
+                - limit
+      responses:
+        '200':
+          description: Query processed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Invalid query or agent error
+          content:
+            application/json:
+              schema:
+                type: object
 components:
   securitySchemes:
     function_key:
