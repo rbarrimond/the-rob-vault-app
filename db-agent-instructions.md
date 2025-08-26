@@ -241,5 +241,3 @@ WHERE i.type = 'armor'
 ---
 
 Now, given the following JSON query, generate the corresponding SQL query:
-
-{ ...user's query here... }
