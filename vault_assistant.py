@@ -421,41 +421,14 @@ class VaultAssistant:
         manifest = self._get_manifest_definitions()
         definitions = manifest["definitions"] if isinstance(manifest, dict) and "definitions" in manifest else manifest
         decoded_items = []
-        if isinstance(items, list):  # Vault
-            # Apply offset and limit for pagination
-            paged_items = items[offset:offset+limit] if limit is not None else items[offset:]
-            for item in paged_items:
-                item_hash = normalize_item_hash(item.get("itemHash"))
-                defn, _ = resolve_manifest_hash(item_hash, definitions)
-                if defn is None or (isinstance(defn, dict) and defn.get("error")):
-                    logging.warning("Item hash %s not found in manifest definitions.", item_hash)
-                    decoded = {
-                        "name": "Unknown",
-                        "type": "Unknown",
-                        "itemHash": item.get("itemHash"),
-                        "itemInstanceId": item.get("itemInstanceId"),
-                        "manifestMissing": True
-                    }
-                else:
-                    decoded = {
-                        "name": defn.get("displayProperties", {}).get("name", "Unknown"),
-                        "type": defn.get("itemTypeDisplayName", "Unknown"),
-                        "itemHash": item.get("itemHash"),
-                        "itemInstanceId": item.get("itemInstanceId"),
-                    }
-                    if include_perks:
-                        decoded["perks"] = self._extract_perks(defn, definitions)
-                decoded_items.append(decoded)
-        elif isinstance(items, dict):  # Characters
-            for char_id, char_data in items.items():
-                char_items = char_data.get("items", [])
-                # Apply offset and limit for pagination per character
-                paged_char_items = char_items[offset:offset+limit] if limit is not None else char_items[offset:]
-                enriched_items = []
-                for item in paged_char_items:
+        if source == "vault":
+            # Vault: flat list of items
+            if isinstance(items, list):
+                paged_items = items[offset:offset+limit] if limit is not None else items[offset:]
+                for item in paged_items:
                     item_hash = normalize_item_hash(item.get("itemHash"))
                     defn, _ = resolve_manifest_hash(item_hash, definitions)
-                    if defn is None:
+                    if defn is None or (isinstance(defn, dict) and defn.get("error")):
                         logging.warning("Item hash %s not found in manifest definitions.", item_hash)
                         decoded = {
                             "name": "Unknown",
@@ -473,11 +446,74 @@ class VaultAssistant:
                         }
                         if include_perks:
                             decoded["perks"] = self._extract_perks(defn, definitions)
-                    enriched_items.append(decoded)
-                decoded_items.append({
-                    "characterId": char_id,
-                    "items": enriched_items
-                })
+                    decoded_items.append(decoded)
+        elif source == "characters":
+            # Characters: can be dict or list of dicts
+            if isinstance(items, dict):
+                # Old format: {characterId: {items: [...]}}
+                for char_id, char_data in items.items():
+                    char_items = char_data.get("items", [])
+                    paged_char_items = char_items[offset:offset+limit] if limit is not None else char_items[offset:]
+                    enriched_items = []
+                    for item in paged_char_items:
+                        item_hash = normalize_item_hash(item.get("itemHash"))
+                        defn, _ = resolve_manifest_hash(item_hash, definitions)
+                        if defn is None:
+                            logging.warning("Item hash %s not found in manifest definitions.", item_hash)
+                            decoded = {
+                                "name": "Unknown",
+                                "type": "Unknown",
+                                "itemHash": item.get("itemHash"),
+                                "itemInstanceId": item.get("itemInstanceId"),
+                                "manifestMissing": True
+                            }
+                        else:
+                            decoded = {
+                                "name": defn.get("displayProperties", {}).get("name", "Unknown"),
+                                "type": defn.get("itemTypeDisplayName", "Unknown"),
+                                "itemHash": item.get("itemHash"),
+                                "itemInstanceId": item.get("itemInstanceId"),
+                            }
+                            if include_perks:
+                                decoded["perks"] = self._extract_perks(defn, definitions)
+                        enriched_items.append(decoded)
+                    decoded_items.append({
+                        "characterId": char_id,
+                        "items": enriched_items
+                    })
+            elif isinstance(items, list):
+                # New format: list of {characterId, items}
+                for char_obj in items:
+                    char_id = char_obj.get("characterId")
+                    char_items = char_obj.get("items", [])
+                    paged_char_items = char_items[offset:offset+limit] if limit is not None else char_items[offset:]
+                    enriched_items = []
+                    for item in paged_char_items:
+                        item_hash = normalize_item_hash(item.get("itemHash"))
+                        defn, _ = resolve_manifest_hash(item_hash, definitions)
+                        if defn is None:
+                            logging.warning("Item hash %s not found in manifest definitions.", item_hash)
+                            decoded = {
+                                "name": "Unknown",
+                                "type": "Unknown",
+                                "itemHash": item.get("itemHash"),
+                                "itemInstanceId": item.get("itemInstanceId"),
+                                "manifestMissing": True
+                            }
+                        else:
+                            decoded = {
+                                "name": defn.get("displayProperties", {}).get("name", "Unknown"),
+                                "type": defn.get("itemTypeDisplayName", "Unknown"),
+                                "itemHash": item.get("itemHash"),
+                                "itemInstanceId": item.get("itemInstanceId"),
+                            }
+                            if include_perks:
+                                decoded["perks"] = self._extract_perks(defn, definitions)
+                        enriched_items.append(decoded)
+                    decoded_items.append({
+                        "characterId": char_id,
+                        "items": enriched_items
+                    })
         logging.info("Decode pass complete for source: %s", source)
         return decoded_items
 
@@ -693,8 +729,7 @@ class VaultAssistant:
         membership_type = profile_data["destinyMemberships"][0].get("membershipType", "1")
         # Fetch item instance data
         instance_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/Item/{item_instance_id}/?components=300,302,304"
-        instance_resp = retry_request(
-            requests.get, instance_url, headers=headers_auth, timeout=self.timeout)
+        instance_resp = retry_request(requests.get, instance_url, headers=headers_auth, timeout=self.timeout)
         if not instance_resp.ok:
             return None
         instance_data = instance_resp.json().get("Response", {})
