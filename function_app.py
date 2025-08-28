@@ -21,13 +21,6 @@ from azure.data.tables import TableServiceClient
 
 from vault_assistant import VaultAssistant
 
-# Configure logging
-# logging.basicConfig(
-#     level=os.getenv("LOG_LEVEL", "DEBUG"),
-#     format="%(asctime)s %(levelname)s %(name)s %(message)s"
-# )
-logger = logging.getLogger("azure")
-
 app = func.FunctionApp()
 
 # Constants and configuration
@@ -319,7 +312,7 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     except Exception:
         return func.HttpResponse("'hash' must be an integer.", status_code=400)
     definition_data, status = assistant.get_manifest_item(hash_str)
-    if definition_data is None:
+    if definition_data is None or (isinstance(definition_data, dict) and definition_data.get("error")):
         logging.error("[manifest/item] Item not found in manifest. Status: %d", status)
         return func.HttpResponse("Item not found in manifest", status_code=status)
     logging.info("[manifest/item] Successfully returned manifest item.")
@@ -374,7 +367,23 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to list DIM backups", status_code=500)
 
 
-# --- General Utility & New Features ---
+@app.route(route="query", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+def query_agent(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Accepts a JSON query conforming to the Vault Sentinel schema and returns the agent's response.
+    """
+    logging.info("[query] POST request received.")
+    try:
+        query = req.get_json()
+    except Exception as e:
+        logging.error("[query] Invalid JSON: %s", e)
+        return func.HttpResponse(json.dumps({"error": "Invalid JSON"}), status_code=400, mimetype="application/json")
+    try:
+        result = assistant.process_query(query)
+        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=200)
+    except Exception as e:
+        logging.error("[query] Agent error: %s", e)
+        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=400, mimetype="application/json")
 
 
 @app.route(route="static/{filename}", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)

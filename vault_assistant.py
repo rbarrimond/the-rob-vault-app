@@ -62,6 +62,7 @@ class VaultAssistant:
             api_base=api_base,
             timeout=timeout
         )
+        self.db_agent = None  # Ensure db_agent attribute always exists
 
     # Session/auth methods are now delegated to BungieSessionManager
     def exchange_code_for_token(self, code: str) -> dict:
@@ -152,10 +153,23 @@ class VaultAssistant:
             "manifestReady": True
         }, 200
 
+    def process_query(self, query: dict) -> dict:
+        """
+        Process a query using the Vault Sentinel DB Agent.
+        Args:
+            query (dict): Query conforming to the Vault Sentinel schema.
+        Returns:
+            dict: Agent response.
+        """
+        if not hasattr(self, 'db_agent') or self.db_agent is None:
+            raise AttributeError("VaultAssistant is missing a db_agent instance.")
+        return self.db_agent.process_query(query)
+
     def get_vault(self) -> tuple[list, int] | tuple[None, int]:
         """
-        Fetch user's Destiny 2 vault inventory and save to blob storage using stored session.
+        Efficiently fetch user's Destiny 2 vault inventory, using blob cache if up-to-date.
 
+        Compares the blob's last modified date with Bungie profile's lastModified before fetching inventory.
         Returns:
             tuple: (inventory list, status_code)
         """
@@ -175,17 +189,49 @@ class VaultAssistant:
         membership = profile_data["destinyMemberships"][0]
         membership_id = membership["membershipId"]
         membership_type = membership["membershipType"]
+
+        # Get Bungie profile lastModified
+        get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
+        profile_detail_resp = retry_request(requests.get, get_profile_url, headers=headers, timeout=self.timeout)
+        if not profile_detail_resp.ok:
+            logging.error("Failed to get profile details: status %d", profile_detail_resp.status_code)
+            return None, profile_detail_resp.status_code
+        profile_detail = profile_detail_resp.json()["Response"].get("profile", {}).get("data", {})
+        bungie_last_modified = profile_detail.get("dateLastPlayed") or profile_detail.get("lastModified")
+        if bungie_last_modified:
+            try:
+                bungie_last_modified_dt = datetime.strptime(bungie_last_modified, "%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                bungie_last_modified_dt = None
+        else:
+            bungie_last_modified_dt = None
+
+        # Get blob last modified
+        blob_name = f"{membership_id}.json"
+        container = self._get_blob_container()
+        blob_client = container.get_blob_client(blob_name)
+        blob_exists = blob_client.exists()
+        blob_last_modified_dt = None
+        if blob_exists:
+            props = blob_client.get_blob_properties()
+            blob_last_modified_dt = props.last_modified.replace(tzinfo=None)
+
+        # If blob exists and is newer than Bungie profile, use cached inventory
+        if blob_exists and bungie_last_modified_dt and blob_last_modified_dt and blob_last_modified_dt >= bungie_last_modified_dt:
+            logging.info("Using cached vault inventory from blob for user: %s", membership_id)
+            blob_data = blob_client.download_blob().readall()
+            inventory = json.loads(blob_data)
+            return inventory, 200
+
+        # Otherwise, fetch fresh inventory and update blob
         inventory_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=102"
         inv_resp = retry_request(requests.get, inventory_url, headers=headers, timeout=self.timeout)
         if not inv_resp.ok:
-            logging.error(
-                "Failed to get vault inventory: status %d", inv_resp.status_code)
+            logging.error("Failed to get vault inventory: status %d", inv_resp.status_code)
             return None, inv_resp.status_code
         inventory = inv_resp.json()["Response"]["profileInventory"]["data"]["items"]
-        save_blob(self.storage_conn_str, self.blob_container,
-                  f"{membership_id}.json", json.dumps(inventory))
-        logging.info(
-            "Vault inventory fetched and saved for user: %s", membership_id)
+        save_blob(self.storage_conn_str, self.blob_container, blob_name, json.dumps(inventory))
+        logging.info("Vault inventory fetched and saved for user: %s", membership_id)
         return inventory, 200
 
     def get_characters(self) -> tuple[dict, int] | tuple[None, int]:
@@ -381,7 +427,7 @@ class VaultAssistant:
             for item in paged_items:
                 item_hash = normalize_item_hash(item.get("itemHash"))
                 defn, _ = resolve_manifest_hash(item_hash, definitions)
-                if defn is None:
+                if defn is None or (isinstance(defn, dict) and defn.get("error")):
                     logging.warning("Item hash %s not found in manifest definitions.", item_hash)
                     decoded = {
                         "name": "Unknown",

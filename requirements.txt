@@ -1,26 +1,27 @@
+
 ########################################
 # General dependencies
 ########################################
-requests
 psutil
+requests
 
 ########################################
 # Azure Functions dependencies
 ########################################
 azure-functions
-# Workaround for Azure Functions for cryptography dependency issue
-cryptography==43.0.3
+cryptography==43.0.3  # Workaround for Azure Functions for cryptography dependency issue
 
 ########################################
 # Azure Data dependencies
 ########################################
+azure-core
 azure-data-tables
 azure-storage-blob
-azure-core
 
 ########################################
 # Azure SQL and AI integration
 ########################################
-pyodbc
-azure-identity
 azure-ai-inference
+azure-identity
+openai
+pyodbc
