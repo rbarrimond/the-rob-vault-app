@@ -251,7 +251,7 @@ class VaultAssistant:
 
     def get_characters(self) -> tuple[dict, int] | tuple[None, int]:
         """
-        Fetch user's Destiny 2 character inventories and save to blob storage.
+        Fetch user's Destiny 2 character inventories and save to blob storage, using cached data if up-to-date.
 
         Returns:
             tuple: (inventories dict, status_code)
@@ -275,7 +275,43 @@ class VaultAssistant:
         membership_id = membership["membershipId"]
         membership_type = membership["membershipType"]
 
-        # Fetch only inventory (201)
+        # Get Bungie profile lastModified
+        get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
+        profile_detail_resp = retry_request(
+            requests.get, get_profile_url, headers=headers, timeout=self.timeout)
+        if not profile_detail_resp.ok:
+            logging.error("Failed to get profile details: status %d",
+                          profile_detail_resp.status_code)
+            return None, profile_detail_resp.status_code
+        profile_detail = profile_detail_resp.json()["Response"].get("profile", {}).get("data", {})
+        bungie_last_modified = profile_detail.get("dateLastPlayed") or profile_detail.get("lastModified")
+        if bungie_last_modified:
+            try:
+                bungie_last_modified_dt = datetime.strptime(bungie_last_modified, "%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                bungie_last_modified_dt = None
+        else:
+            bungie_last_modified_dt = None
+
+        # Get blob last modified
+        blob_name = f"{membership_id}-characters.json"
+        container = self._get_blob_container()
+        blob_client = container.get_blob_client(blob_name)
+        blob_exists = blob_client.exists()
+        blob_last_modified_dt = None
+        if blob_exists:
+            props = blob_client.get_blob_properties()
+            blob_last_modified_dt = props.last_modified.replace(tzinfo=None)
+
+        # If blob exists and is newer than Bungie profile, use cached inventory
+        if blob_exists and bungie_last_modified_dt and blob_last_modified_dt and blob_last_modified_dt >= bungie_last_modified_dt:
+            logging.info(
+                "Using cached character inventories from blob for user: %s", membership_id)
+            blob_data = blob_client.download_blob().readall()
+            inventory_data = json.loads(blob_data)
+            return inventory_data, 200
+
+        # Otherwise, fetch fresh inventory and update blob
         char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=201"
         char_resp = retry_request(
             requests.get, char_url, headers=headers, timeout=self.timeout)
@@ -288,7 +324,7 @@ class VaultAssistant:
 
         # Save inventories directly
         save_blob(self.storage_conn_str, self.blob_container,
-                  f"{membership_id}-characters.json", json.dumps(inventory_data))
+                  blob_name, json.dumps(inventory_data))
         logging.info(
             "Character inventories fetched and saved for user: %s", membership_id)
         return inventory_data, 200
