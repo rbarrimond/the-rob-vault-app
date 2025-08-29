@@ -21,33 +21,32 @@ from bungie_session_manager import BungieSessionManager
 from helpers import (get_manifest, normalize_item_hash, resolve_manifest_hash,
                      retry_request, save_blob, save_dim_backup_blob)
 
-# Bungie API definitions required for decoding and optimizing character loadouts
+# Bungie manifest definition keys required for decoding and optimizing character loadouts
 BUNGIE_DEFINITIONS_FOR_DECODING = [
-    # General item and inventory definitions
-    "Destiny.Entities.Characters.DestinyCharacterComponent",
-    "Destiny.Entities.Items.DestinyItemComponent",
-    "Destiny.Entities.Inventory.DestinyInventoryComponent",
-    "Destiny.Definitions.DestinyInventoryItemDefinition",
-    "Destiny.Definitions.DestinyInventoryBucketDefinition",
-    # Item type/category filtering
-    "Destiny.Definitions.DestinyItemCategoryDefinition",
-    # Stats and sockets for weapons, armor, ghosts
-    "Destiny.Definitions.DestinyItemStatBlockDefinition",
-    "Destiny.Definitions.DestinyItemSocketBlockDefinition",
-    # Weapon-specific
-    "Destiny.Definitions.DestinyDamageTypeDefinition",
-    # Artifact-specific
-    "Destiny.Definitions.Artifacts.DestinyArtifactDefinition",
-    "Destiny.Definitions.Artifacts.DestinyArtifactTierDefinition",
-    "Destiny.Definitions.Artifacts.DestinyArtifactTierItemDefinition",
-    # Loadout optimization
-    "Destiny.Definitions.DestinyStatDefinition",
-    "Destiny.Definitions.DestinyItemTierTypeDefinition",
-    "Destiny.Definitions.DestinyPlugSetDefinition",
-    "Destiny.Definitions.DestinySocketTypeDefinition",
-    "Destiny.Definitions.DestinyTalentGridDefinition",
-    "Destiny.Definitions.DestinyClassDefinition",
-    "Destiny.Definitions.DestinyRaceDefinition",
+    # --- Item and Inventory ---
+    "DestinyInventoryItemDefinition",      # weapons, armor, ghosts, artifacts, mods, etc.
+    "DestinyInventoryBucketDefinition",    # vault, character slots, etc.
+    "DestinyItemCategoryDefinition",       # weapon, armor, ghost, etc.
+    "DestinyItemTierTypeDefinition",       # Exotic, Legendary, etc.
+
+    # --- Stats and Sockets ---
+    "DestinyItemStatDefinition",           # Mobility, Recovery, etc.
+    "DestinyItemSocketBlockDefinition",    # sockets, mods, perks
+    "DestinyPlugSetDefinition",            # reusable mods/perks
+    "DestinySocketTypeDefinition",         # socket compatibility
+
+    # --- Damage Types ---
+    "DestinyDamageTypeDefinition",         # Arc, Solar, Void, Stasis, etc.
+
+    # --- Artifacts ---
+    "DestinyArtifactDefinition",           # seasonal artifacts
+    "DestinyArtifactTierDefinition",       # artifact unlock tiers
+    "DestinyArtifactTierItemDefinition",   # artifact unlockable items
+
+    # --- Subclass and Class Info ---
+    "DestinyTalentGridDefinition",         # subclass/builds
+    "DestinyClassDefinition",              # Titan, Hunter, Warlock
+    "DestinyRaceDefinition",               # Human, Awoken, Exo
 ]
 
 class VaultAssistant:
