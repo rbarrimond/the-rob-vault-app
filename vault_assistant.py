@@ -16,16 +16,39 @@ from datetime import datetime
 
 import requests
 from azure.storage.blob import BlobServiceClient
-from helpers import (
-    get_manifest,
-    retry_request,
-    save_blob,
-    save_dim_backup_blob,
-    resolve_manifest_hash,
-    normalize_item_hash
-)
-from bungie_session_manager import BungieSessionManager
 
+from bungie_session_manager import BungieSessionManager
+from helpers import (get_manifest, normalize_item_hash, resolve_manifest_hash,
+                     retry_request, save_blob, save_dim_backup_blob)
+
+# Bungie API definitions required for decoding and optimizing character loadouts
+BUNGIE_DEFINITIONS_FOR_DECODING = [
+    # General item and inventory definitions
+    "Destiny.Entities.Characters.DestinyCharacterComponent",
+    "Destiny.Entities.Items.DestinyItemComponent",
+    "Destiny.Entities.Inventory.DestinyInventoryComponent",
+    "Destiny.Definitions.DestinyInventoryItemDefinition",
+    "Destiny.Definitions.DestinyInventoryBucketDefinition",
+    # Item type/category filtering
+    "Destiny.Definitions.DestinyItemCategoryDefinition",
+    # Stats and sockets for weapons, armor, ghosts
+    "Destiny.Definitions.DestinyItemStatBlockDefinition",
+    "Destiny.Definitions.DestinyItemSocketBlockDefinition",
+    # Weapon-specific
+    "Destiny.Definitions.DestinyDamageTypeDefinition",
+    # Artifact-specific
+    "Destiny.Definitions.Artifacts.DestinyArtifactDefinition",
+    "Destiny.Definitions.Artifacts.DestinyArtifactTierDefinition",
+    "Destiny.Definitions.Artifacts.DestinyArtifactTierItemDefinition",
+    # Loadout optimization
+    "Destiny.Definitions.DestinyStatDefinition",
+    "Destiny.Definitions.DestinyItemTierTypeDefinition",
+    "Destiny.Definitions.DestinyPlugSetDefinition",
+    "Destiny.Definitions.DestinySocketTypeDefinition",
+    "Destiny.Definitions.DestinyTalentGridDefinition",
+    "Destiny.Definitions.DestinyClassDefinition",
+    "Destiny.Definitions.DestinyRaceDefinition",
+]
 
 class VaultAssistant:
     """
@@ -449,13 +472,20 @@ class VaultAssistant:
 
     def _get_manifest_definitions(self) -> dict:
         """
-        Fetch and return manifest definitions, using cache if available.
+        Fetch and return only required manifest definitions, using cache if available.
 
         Returns:
             dict: Manifest definitions.
         """
         headers = {"X-API-Key": self.api_key}
-        return get_manifest(headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
+        return get_manifest(
+            headers,
+            self.manifest_cache,
+            self.api_base,
+            retry_request,
+            self.timeout,
+            required_types=BUNGIE_DEFINITIONS_FOR_DECODING
+        )
 
     def _decode_blob(self, source: str = 'vault', include_perks: bool = False, limit: int = None, offset: int = 0) -> list:
         """
@@ -612,8 +642,7 @@ class VaultAssistant:
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
                 norm_plug_hash = normalize_item_hash(plug_hash)
-                plug_def, _ = resolve_manifest_hash(
-                    norm_plug_hash, definitions)
+                plug_def, _ = resolve_manifest_hash(norm_plug_hash, definitions)
                 if plug_def:
                     perks.append({
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),

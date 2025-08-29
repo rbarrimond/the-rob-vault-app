@@ -84,8 +84,9 @@ def save_table_entity(connection_string, table_name, entity):
     logging.info("Saved entity to table: %s, RowKey: %s", table_name, entity.get("RowKey"))
 
 # Fetch and cache Destiny 2 manifest definitions
-def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout):
-    """Fetch and cache Destiny 2 manifest definitions from the Bungie API."""
+
+def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout, required_types=None):
+    """Fetch and cache only required Destiny 2 manifest definitions from the Bungie API."""
     index_resp = retry_request_func(
         requests.get,
         f"{api_base}/Destiny2/Manifest/",
@@ -101,19 +102,23 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
     cached_version = manifest_cache.get("version")
     cached_defs = manifest_cache.get("definitions")
 
-    # If version matches cache, return cached definitions
+    # If version matches cache and all required types are present, return cached definitions
     if cached_defs and cached_version == manifest_version:
-        logging.info("Manifest definitions found in cache (version: %s).", manifest_version)
-        return {"definitions": cached_defs, "version": manifest_version}
+        if required_types:
+            if all(t in cached_defs for t in required_types):
+                logging.info("Manifest definitions found in cache (version: %s).", manifest_version)
+                return {"definitions": cached_defs, "version": manifest_version}
+        else:
+            logging.info("Manifest definitions found in cache (version: %s).", manifest_version)
+            return {"definitions": cached_defs, "version": manifest_version}
 
-    # Otherwise, reload manifest definitions
+    # Otherwise, reload only required manifest definitions
     en_paths = index_data.get("jsonWorldComponentContentPaths", {}).get("en", {})
-
-    # Dynamically load all available definition types from the manifest index
-    def_types = list(en_paths.keys())
     manifest = {}
+    def_types = required_types if required_types else list(en_paths.keys())
 
-    for def_type, path in en_paths.items():
+    for def_type in def_types:
+        path = en_paths.get(def_type)
         if not path:
             logging.error("Manifest index missing path for %s", def_type)
             continue
@@ -134,7 +139,7 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout)
 
     manifest_cache["definitions"] = manifest
     manifest_cache["version"] = manifest_version
-    logging.info("All manifest definitions loaded and cached (version: %s).", manifest_version)
+    logging.info("Required manifest definitions loaded and cached (version: %s).", manifest_version)
     return {"definitions": manifest, "version": manifest_version}
 
 
