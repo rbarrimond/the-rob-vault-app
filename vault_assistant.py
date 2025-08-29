@@ -149,7 +149,7 @@ class VaultAssistant:
         membership_type = membership["membershipType"]
         # Confirm manifest is loaded
         get_manifest(headers, self.manifest_cache,
-                     self.api_base, retry_request, self.timeout)
+                     self.api_base, retry_request, self.timeout, required_types=BUNGIE_DEFINITIONS_FOR_DECODING)
         save_blob(self.storage_conn_str, self.blob_container,
                   f"{membership_id}-manifest.json", json.dumps(self.manifest_cache))
         # Get character list
