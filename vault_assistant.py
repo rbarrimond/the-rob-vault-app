@@ -252,10 +252,10 @@ class VaultAssistant:
 
     def get_characters(self) -> tuple[dict, int] | tuple[None, int]:
         """
-        Fetch user's Destiny 2 character equipment and save to blob storage using stored session.
+        Fetch user's Destiny 2 character equipment and inventory, merge them, and save to blob storage.
 
         Returns:
-            tuple: (equipment dict, status_code)
+            tuple: (merged dict, status_code)
         """
         session = self.get_session()
         access_token = session["access_token"]
@@ -264,7 +264,7 @@ class VaultAssistant:
             "X-API-Key": self.api_key
         }
         profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
-        logging.info("Fetching character equipment for user.")
+        logging.info("Fetching character equipment and inventory for user.")
         profile_resp = retry_request(
             requests.get, profile_url, headers=headers, timeout=self.timeout)
         if not profile_resp.ok:
@@ -275,19 +275,33 @@ class VaultAssistant:
         membership = profile_data["destinyMemberships"][0]
         membership_id = membership["membershipId"]
         membership_type = membership["membershipType"]
-        char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=201"
+
+        # Fetch both equipment (205) and inventory (201)
+        char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=201,205"
         char_resp = retry_request(
             requests.get, char_url, headers=headers, timeout=self.timeout)
         if not char_resp.ok:
             logging.error(
-                "Failed to get character equipment: status %d", char_resp.status_code)
+                "Failed to get character equipment/inventory: status %d", char_resp.status_code)
             return None, char_resp.status_code
-        equipment = char_resp.json()["Response"]["characterEquipment"]["data"]
+        resp_json = char_resp.json()["Response"]
+        equipment_data = resp_json["characterEquipment"]["data"]
+        inventory_data = resp_json["characterInventories"]["data"]
+
+        # Merge equipment and inventory for each character
+        merged = {}
+        for char_id in equipment_data:
+            eq_items = equipment_data[char_id].get("items", [])
+            inv_items = inventory_data.get(char_id, {}).get("items", [])
+            merged[char_id] = {
+                "items": eq_items + inv_items
+            }
+
         save_blob(self.storage_conn_str, self.blob_container,
-                  f"{membership_id}-characters.json", json.dumps(equipment))
+                  f"{membership_id}-characters.json", json.dumps(merged))
         logging.info(
-            "Character equipment fetched and saved for user: %s", membership_id)
-        return equipment, 200
+            "Character equipment and inventory fetched and saved for user: %s", membership_id)
+        return merged, 200
 
     def get_manifest_item(self, item_hash, definition=None) -> tuple[dict, int]:
         """
