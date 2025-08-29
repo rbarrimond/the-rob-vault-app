@@ -19,7 +19,6 @@ from azure.storage.blob import BlobServiceClient
 from helpers import (
     get_manifest,
     retry_request,
-    load_blob,
     save_blob,
     save_dim_backup_blob,
     resolve_manifest_hash,
@@ -252,10 +251,10 @@ class VaultAssistant:
 
     def get_characters(self) -> tuple[dict, int] | tuple[None, int]:
         """
-        Fetch user's Destiny 2 character equipment and inventory, merge them, and save to blob storage.
+        Fetch user's Destiny 2 character inventories and save to blob storage.
 
         Returns:
-            tuple: (merged dict, status_code)
+            tuple: (inventories dict, status_code)
         """
         session = self.get_session()
         access_token = session["access_token"]
@@ -264,7 +263,7 @@ class VaultAssistant:
             "X-API-Key": self.api_key
         }
         profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
-        logging.info("Fetching character equipment and inventory for user.")
+        logging.info("Fetching character inventories for user.")
         profile_resp = retry_request(
             requests.get, profile_url, headers=headers, timeout=self.timeout)
         if not profile_resp.ok:
@@ -276,32 +275,23 @@ class VaultAssistant:
         membership_id = membership["membershipId"]
         membership_type = membership["membershipType"]
 
-        # Fetch both equipment (205) and inventory (201)
-        char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=201,205"
+        # Fetch only inventory (201)
+        char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=201"
         char_resp = retry_request(
             requests.get, char_url, headers=headers, timeout=self.timeout)
         if not char_resp.ok:
             logging.error(
-                "Failed to get character equipment/inventory: status %d", char_resp.status_code)
+                "Failed to get character inventories: status %d", char_resp.status_code)
             return None, char_resp.status_code
         resp_json = char_resp.json()["Response"]
-        equipment_data = resp_json["characterEquipment"]["data"]
         inventory_data = resp_json["characterInventories"]["data"]
 
-        # Merge equipment and inventory for each character
-        merged = {}
-        for char_id in equipment_data:
-            eq_items = equipment_data[char_id].get("items", [])
-            inv_items = inventory_data.get(char_id, {}).get("items", [])
-            merged[char_id] = {
-                "items": eq_items + inv_items
-            }
-
+        # Save inventories directly
         save_blob(self.storage_conn_str, self.blob_container,
-                  f"{membership_id}-characters.json", json.dumps(merged))
+                  f"{membership_id}-characters.json", json.dumps(inventory_data))
         logging.info(
-            "Character equipment and inventory fetched and saved for user: %s", membership_id)
-        return merged, 200
+            "Character inventories fetched and saved for user: %s", membership_id)
+        return inventory_data, 200
 
     def get_manifest_item(self, item_hash, definition=None) -> tuple[dict, int]:
         """
@@ -451,14 +441,12 @@ class VaultAssistant:
         blob_data = container.download_blob(blob_name).readall()
         items = json.loads(blob_data)
         manifest = self._get_manifest_definitions()
-        definitions = manifest["definitions"] if isinstance(
-            manifest, dict) and "definitions" in manifest else manifest
+        definitions = manifest["definitions"] if isinstance(manifest, dict) and "definitions" in manifest else manifest
         decoded_items = []
         if source == "vault":
             # Vault: flat list of items
             if isinstance(items, list):
-                paged_items = items[offset:offset +
-                                    limit] if limit is not None else items[offset:]
+                paged_items = items[offset:offset + limit] if limit is not None else items[offset:]
                 for item in paged_items:
                     # If already decoded, just append
                     if "name" in item and "type" in item:
@@ -484,17 +472,14 @@ class VaultAssistant:
                             "itemInstanceId": item.get("itemInstanceId"),
                         }
                         if include_perks:
-                            decoded["perks"] = self._extract_perks(
-                                defn, definitions)
+                            decoded["perks"] = self._extract_perks(defn, definitions)
                     decoded_items.append(decoded)
         elif source == "characters":
-            # Characters: can be dict or list of dicts
+            # Characters: dict of characterId: {items: [...]}
             if isinstance(items, dict):
-                # Old format: {characterId: {items: [...]}}
                 for char_id, char_data in items.items():
                     char_items = char_data.get("items", [])
-                    paged_char_items = char_items[offset:offset +
-                                                  limit] if limit is not None else char_items[offset:]
+                    paged_char_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
                     enriched_items = []
                     for item in paged_char_items:
                         # If already decoded, just append
@@ -514,15 +499,22 @@ class VaultAssistant:
                                 "manifestMissing": True
                             }
                         else:
+                            # Defensive: handle missing displayProperties
+                            display_props = defn.get("displayProperties")
+                            if display_props and isinstance(display_props, dict):
+                                name = display_props.get("name", "Unknown")
+                            else:
+                                # Fallback: try 'itemName', 'title', or just use itemHash
+                                name = defn.get("itemName") or defn.get("title") or str(item.get("itemHash"))
+                            type_val = defn.get("itemTypeDisplayName") or defn.get("itemType") or "Unknown"
                             decoded = {
-                                "name": defn.get("displayProperties", {}).get("name", "Unknown"),
-                                "type": defn.get("itemTypeDisplayName", "Unknown"),
+                                "name": name,
+                                "type": type_val,
                                 "itemHash": item.get("itemHash"),
                                 "itemInstanceId": item.get("itemInstanceId"),
                             }
                             if include_perks:
-                                decoded["perks"] = self._extract_perks(
-                                    defn, definitions)
+                                decoded["perks"] = self._extract_perks(defn, definitions)
                         enriched_items.append(decoded)
                     decoded_items.append({
                         "characterId": char_id,
@@ -533,8 +525,7 @@ class VaultAssistant:
                 for char_obj in items:
                     char_id = char_obj.get("characterId")
                     char_items = char_obj.get("items", [])
-                    paged_char_items = char_items[offset:offset +
-                                                  limit] if limit is not None else char_items[offset:]
+                    paged_char_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
                     enriched_items = []
                     for item in paged_char_items:
                         # If already decoded, just append
@@ -561,8 +552,7 @@ class VaultAssistant:
                                 "itemInstanceId": item.get("itemInstanceId"),
                             }
                             if include_perks:
-                                decoded["perks"] = self._extract_perks(
-                                    defn, definitions)
+                                decoded["perks"] = self._extract_perks(defn, definitions)
                         enriched_items.append(decoded)
                     decoded_items.append({
                         "characterId": char_id,
