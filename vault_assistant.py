@@ -27,6 +27,7 @@ from helpers import (
 )
 from bungie_session_manager import BungieSessionManager
 
+
 class VaultAssistant:
     """
     Business logic for Destiny 2 Vault Assistant operations.
@@ -125,7 +126,8 @@ class VaultAssistant:
         membership_id = membership["membershipId"]
         membership_type = membership["membershipType"]
         # Confirm manifest is loaded
-        get_manifest(headers, self.manifest_cache, self.api_base, retry_request, self.timeout)
+        get_manifest(headers, self.manifest_cache,
+                     self.api_base, retry_request, self.timeout)
         save_blob(self.storage_conn_str, self.blob_container,
                   f"{membership_id}-manifest.json", json.dumps(self.manifest_cache))
         # Get character list
@@ -162,7 +164,8 @@ class VaultAssistant:
             dict: Agent response.
         """
         if not hasattr(self, 'db_agent') or self.db_agent is None:
-            raise AttributeError("VaultAssistant is missing a db_agent instance.")
+            raise AttributeError(
+                "VaultAssistant is missing a db_agent instance.")
         return self.db_agent.process_query(query)
 
     def get_vault(self) -> tuple[list, int] | tuple[None, int]:
@@ -181,9 +184,11 @@ class VaultAssistant:
         }
         profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
         logging.info("Fetching vault for user.")
-        profile_resp = retry_request(requests.get, profile_url, headers=headers, timeout=self.timeout)
+        profile_resp = retry_request(
+            requests.get, profile_url, headers=headers, timeout=self.timeout)
         if not profile_resp.ok:
-            logging.error("Failed to get membership: status %d", profile_resp.status_code)
+            logging.error("Failed to get membership: status %d",
+                          profile_resp.status_code)
             return None, profile_resp.status_code
         profile_data = profile_resp.json()["Response"]
         membership = profile_data["destinyMemberships"][0]
@@ -192,15 +197,20 @@ class VaultAssistant:
 
         # Get Bungie profile lastModified
         get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
-        profile_detail_resp = retry_request(requests.get, get_profile_url, headers=headers, timeout=self.timeout)
+        profile_detail_resp = retry_request(
+            requests.get, get_profile_url, headers=headers, timeout=self.timeout)
         if not profile_detail_resp.ok:
-            logging.error("Failed to get profile details: status %d", profile_detail_resp.status_code)
+            logging.error("Failed to get profile details: status %d",
+                          profile_detail_resp.status_code)
             return None, profile_detail_resp.status_code
-        profile_detail = profile_detail_resp.json()["Response"].get("profile", {}).get("data", {})
-        bungie_last_modified = profile_detail.get("dateLastPlayed") or profile_detail.get("lastModified")
+        profile_detail = profile_detail_resp.json(
+        )["Response"].get("profile", {}).get("data", {})
+        bungie_last_modified = profile_detail.get(
+            "dateLastPlayed") or profile_detail.get("lastModified")
         if bungie_last_modified:
             try:
-                bungie_last_modified_dt = datetime.strptime(bungie_last_modified, "%Y-%m-%dT%H:%M:%SZ")
+                bungie_last_modified_dt = datetime.strptime(
+                    bungie_last_modified, "%Y-%m-%dT%H:%M:%SZ")
             except Exception:
                 bungie_last_modified_dt = None
         else:
@@ -218,20 +228,26 @@ class VaultAssistant:
 
         # If blob exists and is newer than Bungie profile, use cached inventory
         if blob_exists and bungie_last_modified_dt and blob_last_modified_dt and blob_last_modified_dt >= bungie_last_modified_dt:
-            logging.info("Using cached vault inventory from blob for user: %s", membership_id)
+            logging.info(
+                "Using cached vault inventory from blob for user: %s", membership_id)
             blob_data = blob_client.download_blob().readall()
             inventory = json.loads(blob_data)
             return inventory, 200
 
         # Otherwise, fetch fresh inventory and update blob
         inventory_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=102"
-        inv_resp = retry_request(requests.get, inventory_url, headers=headers, timeout=self.timeout)
+        inv_resp = retry_request(
+            requests.get, inventory_url, headers=headers, timeout=self.timeout)
         if not inv_resp.ok:
-            logging.error("Failed to get vault inventory: status %d", inv_resp.status_code)
+            logging.error(
+                "Failed to get vault inventory: status %d", inv_resp.status_code)
             return None, inv_resp.status_code
-        inventory = inv_resp.json()["Response"]["profileInventory"]["data"]["items"]
-        save_blob(self.storage_conn_str, self.blob_container, blob_name, json.dumps(inventory))
-        logging.info("Vault inventory fetched and saved for user: %s", membership_id)
+        inventory = inv_resp.json(
+        )["Response"]["profileInventory"]["data"]["items"]
+        save_blob(self.storage_conn_str, self.blob_container,
+                  blob_name, json.dumps(inventory))
+        logging.info(
+            "Vault inventory fetched and saved for user: %s", membership_id)
         return inventory, 200
 
     def get_characters(self) -> tuple[dict, int] | tuple[None, int]:
@@ -259,7 +275,7 @@ class VaultAssistant:
         membership = profile_data["destinyMemberships"][0]
         membership_id = membership["membershipId"]
         membership_type = membership["membershipType"]
-        char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=205"
+        char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=201"
         char_resp = retry_request(
             requests.get, char_url, headers=headers, timeout=self.timeout)
         if not char_resp.ok:
@@ -284,13 +300,15 @@ class VaultAssistant:
             tuple: (definition dict, status_code)
         """
         norm_hash = normalize_item_hash(item_hash)
-        definition, def_type = resolve_manifest_hash(norm_hash, self.manifest_cache.get("definitions", {}))
+        definition, def_type = resolve_manifest_hash(
+            norm_hash, self.manifest_cache.get("definitions", {}))
         if not definition:
             # Try fallback: sometimes hashes are passed as signed ints in string form
             try:
                 alt_hash = normalize_item_hash(int(norm_hash))
                 if alt_hash != norm_hash:
-                    definition, def_type = resolve_manifest_hash(alt_hash, self.manifest_cache.get("definitions", {}))
+                    definition, def_type = resolve_manifest_hash(
+                        alt_hash, self.manifest_cache.get("definitions", {}))
             except Exception:
                 pass
         if not definition:
@@ -419,17 +437,24 @@ class VaultAssistant:
         blob_data = container.download_blob(blob_name).readall()
         items = json.loads(blob_data)
         manifest = self._get_manifest_definitions()
-        definitions = manifest["definitions"] if isinstance(manifest, dict) and "definitions" in manifest else manifest
+        definitions = manifest["definitions"] if isinstance(
+            manifest, dict) and "definitions" in manifest else manifest
         decoded_items = []
         if source == "vault":
             # Vault: flat list of items
             if isinstance(items, list):
-                paged_items = items[offset:offset+limit] if limit is not None else items[offset:]
+                paged_items = items[offset:offset +
+                                    limit] if limit is not None else items[offset:]
                 for item in paged_items:
+                    # If already decoded, just append
+                    if "name" in item and "type" in item:
+                        decoded_items.append(item)
+                        continue
                     item_hash = normalize_item_hash(item.get("itemHash"))
                     defn, _ = resolve_manifest_hash(item_hash, definitions)
                     if defn is None or (isinstance(defn, dict) and defn.get("error")):
-                        logging.warning("Item hash %s not found in manifest definitions.", item_hash)
+                        logging.warning(
+                            "Item hash %s not found in manifest definitions.", item_hash)
                         decoded = {
                             "name": "Unknown",
                             "type": "Unknown",
@@ -445,7 +470,8 @@ class VaultAssistant:
                             "itemInstanceId": item.get("itemInstanceId"),
                         }
                         if include_perks:
-                            decoded["perks"] = self._extract_perks(defn, definitions)
+                            decoded["perks"] = self._extract_perks(
+                                defn, definitions)
                     decoded_items.append(decoded)
         elif source == "characters":
             # Characters: can be dict or list of dicts
@@ -453,13 +479,19 @@ class VaultAssistant:
                 # Old format: {characterId: {items: [...]}}
                 for char_id, char_data in items.items():
                     char_items = char_data.get("items", [])
-                    paged_char_items = char_items[offset:offset+limit] if limit is not None else char_items[offset:]
+                    paged_char_items = char_items[offset:offset +
+                                                  limit] if limit is not None else char_items[offset:]
                     enriched_items = []
                     for item in paged_char_items:
+                        # If already decoded, just append
+                        if "name" in item and "type" in item:
+                            enriched_items.append(item)
+                            continue
                         item_hash = normalize_item_hash(item.get("itemHash"))
                         defn, _ = resolve_manifest_hash(item_hash, definitions)
                         if defn is None:
-                            logging.warning("Item hash %s not found in manifest definitions.", item_hash)
+                            logging.warning(
+                                "Item hash %s not found in manifest definitions.", item_hash)
                             decoded = {
                                 "name": "Unknown",
                                 "type": "Unknown",
@@ -475,7 +507,8 @@ class VaultAssistant:
                                 "itemInstanceId": item.get("itemInstanceId"),
                             }
                             if include_perks:
-                                decoded["perks"] = self._extract_perks(defn, definitions)
+                                decoded["perks"] = self._extract_perks(
+                                    defn, definitions)
                         enriched_items.append(decoded)
                     decoded_items.append({
                         "characterId": char_id,
@@ -486,13 +519,19 @@ class VaultAssistant:
                 for char_obj in items:
                     char_id = char_obj.get("characterId")
                     char_items = char_obj.get("items", [])
-                    paged_char_items = char_items[offset:offset+limit] if limit is not None else char_items[offset:]
+                    paged_char_items = char_items[offset:offset +
+                                                  limit] if limit is not None else char_items[offset:]
                     enriched_items = []
                     for item in paged_char_items:
+                        # If already decoded, just append
+                        if "name" in item and "type" in item:
+                            enriched_items.append(item)
+                            continue
                         item_hash = normalize_item_hash(item.get("itemHash"))
                         defn, _ = resolve_manifest_hash(item_hash, definitions)
                         if defn is None:
-                            logging.warning("Item hash %s not found in manifest definitions.", item_hash)
+                            logging.warning(
+                                "Item hash %s not found in manifest definitions.", item_hash)
                             decoded = {
                                 "name": "Unknown",
                                 "type": "Unknown",
@@ -508,7 +547,8 @@ class VaultAssistant:
                                 "itemInstanceId": item.get("itemInstanceId"),
                             }
                             if include_perks:
-                                decoded["perks"] = self._extract_perks(defn, definitions)
+                                decoded["perks"] = self._extract_perks(
+                                    defn, definitions)
                         enriched_items.append(decoded)
                     decoded_items.append({
                         "characterId": char_id,
@@ -532,7 +572,8 @@ class VaultAssistant:
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
                 norm_plug_hash = normalize_item_hash(plug_hash)
-                plug_def, _ = resolve_manifest_hash(norm_plug_hash, definitions)
+                plug_def, _ = resolve_manifest_hash(
+                    norm_plug_hash, definitions)
                 if plug_def:
                     perks.append({
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
@@ -573,7 +614,6 @@ class VaultAssistant:
             logging.error("Failed to save MIME object: %s", e)
             return {"error": f"Failed to save object: {e}"}, 500
 
-
     def get_item_full_info(self, item_hash: str, item_instance_id: str = None) -> tuple[dict | None, int]:
         """
         Retrieve full information for an item, including perks, stats, and other properties.
@@ -591,9 +631,11 @@ class VaultAssistant:
         if not item_def:
             logging.error("Item hash %s not found in manifest.", norm_hash)
             return None, 404
-        item_info = self._build_item_base_info(item_def, norm_hash, definitions)
+        item_info = self._build_item_base_info(
+            item_def, norm_hash, definitions)
         if item_instance_id:
-            instance_info = self._build_item_instance_info(item_instance_id, definitions)
+            instance_info = self._build_item_instance_info(
+                item_instance_id, definitions)
             if instance_info:
                 item_info.update(instance_info)
         return item_info, 200
@@ -642,7 +684,8 @@ class VaultAssistant:
         for socket in sockets_def:
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
-                plug_def, _ = resolve_manifest_hash(str(plug_hash), definitions)
+                plug_def, _ = resolve_manifest_hash(
+                    str(plug_hash), definitions)
                 # Check for masterwork
                 if plug_def and plug_def.get("itemTypeDisplayName", "").lower().find("masterwork") != -1:
                     masterwork_info = {
@@ -663,30 +706,33 @@ class VaultAssistant:
             info["masterwork"] = masterwork_info
         if mod_info:
             info["mods"] = mod_info
-        
+
         # Seasonal/Power Cap
         info["powerCapHash"] = item_def.get("quality", {}).get("powerCapHash")
         info["seasonHash"] = item_def.get("seasonHash")
         info["seasonalContent"] = item_def.get("seasonalContent")
         info["quality"] = item_def.get("quality")
-        
+
         # Stats
         stats = {}
         stats_def = item_def.get("stats", {}).get("stats", {})
         for stat_hash, stat_obj in stats_def.items():
             stat_def, _ = resolve_manifest_hash(stat_hash, definitions)
-            stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
+            stat_name = stat_def.get("displayProperties", {}).get(
+                "name", stat_hash) if stat_def else stat_hash
             stats[stat_name] = stat_obj.get("value")
         if stats:
             info["stats"] = stats
-        
+
         # Perks (sockets)
         sockets = []
-        socket_categories = item_def.get("sockets", {}).get("socketEntries", [])
+        socket_categories = item_def.get(
+            "sockets", {}).get("socketEntries", [])
         for socket in socket_categories:
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
-                plug_def, _ = resolve_manifest_hash(str(plug_hash), definitions)
+                plug_def, _ = resolve_manifest_hash(
+                    str(plug_hash), definitions)
                 if plug_def:
                     sockets.append({
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
@@ -696,7 +742,7 @@ class VaultAssistant:
                     })
         if sockets:
             info["perks"] = sockets
-        
+
         return info
 
     def _build_item_instance_info(self, item_instance_id, definitions):
@@ -726,10 +772,12 @@ class VaultAssistant:
         profile_data = profile_resp.json().get("Response", {})
         if not profile_data.get("destinyMemberships"):
             return None
-        membership_type = profile_data["destinyMemberships"][0].get("membershipType", "1")
+        membership_type = profile_data["destinyMemberships"][0].get(
+            "membershipType", "1")
         # Fetch item instance data
         instance_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/Item/{item_instance_id}/?components=300,302,304"
-        instance_resp = retry_request(requests.get, instance_url, headers=headers_auth, timeout=self.timeout)
+        instance_resp = retry_request(
+            requests.get, instance_url, headers=headers_auth, timeout=self.timeout)
         if not instance_resp.ok:
             return None
         instance_data = instance_resp.json().get("Response", {})
@@ -739,8 +787,10 @@ class VaultAssistant:
         if inst_stats:
             stats_instance = {}
             for stat_hash, stat_obj in inst_stats.items():
-                stat_def, _ = resolve_manifest_hash(str(stat_hash), definitions)
-                stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
+                stat_def, _ = resolve_manifest_hash(
+                    str(stat_hash), definitions)
+                stat_name = stat_def.get("displayProperties", {}).get(
+                    "name", stat_hash) if stat_def else stat_hash
                 stats_instance[stat_name] = stat_obj.get("value")
             info["instanceStats"] = stats_instance
         # Instance perks (sockets), masterwork, mods
@@ -751,9 +801,11 @@ class VaultAssistant:
         for socket in inst_sockets:
             plug_hash = socket.get("plugHash")
             if plug_hash:
-                plug_def, _ = resolve_manifest_hash(str(plug_hash), definitions)
+                plug_def, _ = resolve_manifest_hash(
+                    str(plug_hash), definitions)
                 if plug_def:
-                    display_name = plug_def.get("itemTypeDisplayName", "").lower()
+                    display_name = plug_def.get(
+                        "itemTypeDisplayName", "").lower()
                     # Perks
                     perks_instance.append({
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
