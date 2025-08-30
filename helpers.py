@@ -213,7 +213,9 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout,
 
     manifest = {}
     extracted_sqlite_path = None
+
     try:
+        # Extract SQLite file from ZIP and save to temporary location
         with zipfile.ZipFile(zip_path, 'r') as zf:
             # Find the largest .content file (the manifest DB)
             manifest_files = [info for info in zf.infolist(
@@ -298,9 +300,6 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout,
     manifest_cache["definitions"] = manifest
     manifest_cache["version"] = manifest_version
     return {"definitions": manifest, "version": manifest_version}
-
-# Attempt to resolve a hash against multiple manifest definition types.
-
 
 def resolve_manifest_hash(item_hash, manifest_cache, definition_types=None):
     """
