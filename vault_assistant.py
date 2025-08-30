@@ -30,21 +30,20 @@ BUNGIE_DEFINITIONS_FOR_DECODING = [
     "DestinyItemTierTypeDefinition",       # Exotic, Legendary, etc.
 
     # --- Stats and Sockets ---
-    "DestinyItemStatDefinition",           # Mobility, Recovery, etc.
-    "DestinyItemSocketBlockDefinition",    # sockets, mods, perks
+    "DestinyStatGroupDefinition",          # stat groupings for items
     "DestinyPlugSetDefinition",            # reusable mods/perks
     "DestinySocketTypeDefinition",         # socket compatibility
+
+    # --- Perks, Intrinsics, Traits ---
+    "DestinyTraitDefinition",              # item traits (foundry, slot, etc.)
 
     # --- Damage Types ---
     "DestinyDamageTypeDefinition",         # Arc, Solar, Void, Stasis, etc.
 
     # --- Artifacts ---
     "DestinyArtifactDefinition",           # seasonal artifacts
-    "DestinyArtifactTierDefinition",       # artifact unlock tiers
-    "DestinyArtifactTierItemDefinition",   # artifact unlockable items
 
     # --- Subclass and Class Info ---
-    "DestinyTalentGridDefinition",         # subclass/builds
     "DestinyClassDefinition",              # Titan, Hunter, Warlock
     "DestinyRaceDefinition",               # Human, Awoken, Exo
 ]

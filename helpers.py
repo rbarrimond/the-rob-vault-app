@@ -1,12 +1,21 @@
+
+# Standard library imports
 import time
 import logging
 import hashlib
 import datetime
+import os
+import tempfile
+import json
+import sqlite3
+import zlib
+import zipfile
+
+# Third-party imports
 import requests
 
 from azure.storage.blob import BlobServiceClient
 from azure.data.tables import TableServiceClient
-
 from azure.core.exceptions import ResourceExistsError
 
 # Normalize Destiny 2 item hash to unsigned 32-bit string
@@ -87,6 +96,10 @@ def save_table_entity(connection_string, table_name, entity):
 
 def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout, required_types=None):
     """Fetch and cache only required Destiny 2 manifest definitions from the Bungie API."""
+
+
+
+    # Get manifest version and download URL
     index_resp = retry_request_func(
         requests.get,
         f"{api_base}/Destiny2/Manifest/",
@@ -94,54 +107,105 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout,
         timeout=timeout
     )
     if not index_resp.ok:
-        logging.error("Failed to fetch manifest index: status %d", index_resp.status_code)
+        logging.error("Manifest index fetch failed with status code %d.", index_resp.status_code)
         return {}
-
     index_data = index_resp.json().get("Response", {})
     manifest_version = index_data.get("version")
-    cached_version = manifest_cache.get("version")
-    cached_defs = manifest_cache.get("definitions")
+    if manifest_cache.get("version") == manifest_version and manifest_cache.get("definitions"):
+        logging.info("Manifest definitions loaded from cache (version: %s).", manifest_version)
+        return {"definitions": manifest_cache["definitions"], "version": manifest_version}
 
-    # If version matches cache and all required types are present, return cached definitions
-    if cached_defs and cached_version == manifest_version:
-        if required_types:
-            if all(t in cached_defs for t in required_types):
-                logging.info("Manifest definitions found in cache (version: %s).", manifest_version)
-                return {"definitions": cached_defs, "version": manifest_version}
-        else:
-            logging.info("Manifest definitions found in cache (version: %s).", manifest_version)
-            return {"definitions": cached_defs, "version": manifest_version}
+    sqlite_path = index_data.get("mobileWorldContentPaths", {}).get("en")
+    if not sqlite_path:
+        logging.error("Manifest index response missing SQLite path.")
+        return {}
+    url = f"https://www.bungie.net{sqlite_path}"
+    resp = retry_request_func(requests.get, url, timeout=timeout)
+    if not resp.ok:
+        logging.error("Manifest ZIP download failed with status code %d.", resp.status_code)
+        return {}
+    with tempfile.NamedTemporaryFile(delete=False, mode="wb") as tmp_file:
+        tmp_file.write(resp.content)
+        zip_path = tmp_file.name
 
-    # Otherwise, reload only required manifest definitions
-    en_paths = index_data.get("jsonWorldComponentContentPaths", {}).get("en", {})
     manifest = {}
-    def_types = required_types if required_types else list(en_paths.keys())
+    extracted_sqlite_path = None
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            # Find the largest .content file (the manifest DB)
+            manifest_files = [info for info in zf.infolist() if info.filename.endswith('.content')]
+            if not manifest_files:
+                logging.error("No .content file found in manifest ZIP archive.")
+                return {}
+            manifest_info = max(manifest_files, key=lambda info: info.file_size)
+            with tempfile.NamedTemporaryFile(delete=False, mode="wb") as sqlite_file:
+                with zf.open(manifest_info.filename, 'r') as src:
+                    sqlite_file.write(src.read())
+                extracted_sqlite_path = sqlite_file.name
 
-    for def_type in def_types:
-        path = en_paths.get(def_type)
-        if not path:
-            logging.error("Manifest index missing path for %s", def_type)
-            continue
-        url = f"https://www.bungie.net{path}"
-        resp = retry_request_func(requests.get, url, timeout=timeout)
-        if not resp.ok:
-            logging.warning("Failed to fetch %s: status %d", def_type, resp.status_code)
-            continue
-        resp_json = resp.json()
-        manifest[def_type] = resp_json.get("Response", resp_json)
-        logging.info("Loaded manifest for %s (entries: %d)", def_type, len(manifest[def_type]))
-
-    found_types = list(manifest)
-    missing_types = [t for t in def_types if t not in found_types]
-    logging.info("Manifest definition types loaded: %s", found_types)
-    if missing_types:
-        logging.warning("Manifest definition types missing: %s", missing_types)
+        # Load required tables from extracted SQLite
+        try:
+            conn2 = sqlite3.connect(extracted_sqlite_path)
+            cursor2 = conn2.cursor()
+            available_tables = [r[0] for r in cursor2.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()]
+            logging.info("Extracted manifest DB tables: %s", available_tables)
+            def_types = required_types if required_types else available_tables
+            for def_type in def_types:
+                if def_type not in available_tables:
+                    logging.warning("Requested definition type '%s' not found in manifest DB tables.", def_type)
+                    continue
+                try:
+                    cursor2.execute(f"SELECT json FROM {def_type}")
+                    rows = cursor2.fetchall()
+                    defs = {}
+                    for row in rows:
+                        try:
+                            # Try decompressing, fallback to plain JSON if decompress fails
+                            data = row[0]
+                            if isinstance(data, str):
+                                # Try to parse as JSON first
+                                try:
+                                    obj = json.loads(data)
+                                    hash_val = str(obj.get("hash", obj.get("itemHash", obj.get("id", None))) )
+                                    if hash_val:
+                                        defs[hash_val] = obj
+                                    continue
+                                except Exception:
+                                    data = data.encode('utf-8')
+                            try:
+                                decompressed = zlib.decompress(data)
+                                obj = json.loads(decompressed.decode('utf-8'))
+                            except Exception as decomp_err:
+                                # If decompression fails, try plain JSON
+                                try:
+                                    obj = json.loads(data.decode('utf-8') if isinstance(data, bytes) else data)
+                                except Exception as json_err:
+                                    logging.error("Decompression and plain JSON parse failed for row in table '%s': %s | %s", def_type, decomp_err, json_err)
+                                    continue
+                            hash_val = str(obj.get("hash", obj.get("itemHash", obj.get("id", None))) )
+                            if hash_val:
+                                defs[hash_val] = obj
+                        except Exception as e:
+                            logging.error("Decompression or JSON parse failed for row in table '%s': %s", def_type, e)
+                            continue
+                    manifest[def_type] = defs
+                except Exception as e:
+                    logging.error("Table query or parse failed for '%s': %s", def_type, e)
+                    continue
+            conn2.close()
+        except Exception as e:
+            logging.error("Manifest DB inspection or parsing error: %s", e)
+            if extracted_sqlite_path:
+                os.remove(extracted_sqlite_path)
+            return {}
+    finally:
+        os.remove(zip_path)
+        if extracted_sqlite_path:
+            os.remove(extracted_sqlite_path)
 
     manifest_cache["definitions"] = manifest
     manifest_cache["version"] = manifest_version
-    logging.info("Required manifest definitions loaded and cached (version: %s).", manifest_version)
     return {"definitions": manifest, "version": manifest_version}
-
 
 # Attempt to resolve a hash against multiple manifest definition types.
 def resolve_manifest_hash(item_hash, manifest_cache, definition_types=None):
