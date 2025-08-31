@@ -37,7 +37,6 @@ assistant = VaultAssistant(
     storage_conn_str=STORAGE_CONNECTION_STRING,
     table_name=TABLE_NAME,
     blob_container=BLOB_CONTAINER,
-    manifest_cache=manifest_cache,
     api_base=BUNGIE_API_BASE,
     timeout=REQUEST_TIMEOUT
 )
