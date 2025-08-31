@@ -1,9 +1,3 @@
-# Maps classType integer values to user-friendly class names
-CLASS_TYPE_MAP = {
-    0: "Titan",
-    1: "Hunter",
-    2: "Warlock"
-}
 """
 Vault Assistant module for Destiny 2.
 
@@ -26,6 +20,7 @@ from azure.storage.blob import BlobServiceClient
 from bungie_session_manager import BungieSessionManager
 from helpers import (get_manifest, normalize_item_hash, resolve_manifest_hash,
                      retry_request, save_blob, save_dim_backup_blob)
+from manifest_cache import ManifestCache
 
 # Bungie manifest definition keys required for decoding and optimizing character loadouts
 BUNGIE_REQUIRED_DEFS = [
@@ -62,6 +57,13 @@ CLASS_NAME_MAP = {
     # Add more mappings if Bungie adds new classes
 }
 
+# Maps classType integer values to user-friendly class names
+CLASS_TYPE_MAP = {
+    0: "Titan",
+    1: "Hunter",
+    2: "Warlock"
+}
+
 class VaultAssistant:
     """
     Business logic for Destiny 2 Vault Assistant operations.
@@ -71,7 +73,7 @@ class VaultAssistant:
     secure storage and scalable operations.
     """
 
-    def __init__(self, api_key: str, storage_conn_str: str, table_name: str, blob_container: str, manifest_cache: dict, api_base: str, timeout: int):
+    def __init__(self, api_key: str, storage_conn_str: str, table_name: str, blob_container: str, api_base: str, timeout: int):
         """
         Initialize VaultAssistant with configuration and dependencies.
 
@@ -80,7 +82,7 @@ class VaultAssistant:
             storage_conn_str (str): Azure Storage connection string.
             table_name (str): Azure Table name for session storage.
             blob_container (str): Azure Blob container name.
-            manifest_cache (dict): Manifest cache for Destiny 2 definitions.
+            manifest_cache (dict): Manifest cache for Destiny 2 definitions (removed).
             api_base (str): Bungie API base URL.
             timeout (int): Request timeout in seconds.
         """
@@ -90,7 +92,12 @@ class VaultAssistant:
         self.blob_container = blob_container
         self.api_base = api_base
         self.timeout = timeout
-        self.manifest_cache = manifest_cache or {}
+        self.manifest_cache = ManifestCache(
+            api_base=api_base,
+            headers={"X-API-Key": api_key},
+            retry_request_func=retry_request,
+            timeout=timeout
+        )
         self.session_manager = BungieSessionManager(
             api_key=api_key,
             storage_conn_str=storage_conn_str,
@@ -162,11 +169,8 @@ class VaultAssistant:
         membership = profile_data["destinyMemberships"][0]
         membership_id = membership["membershipId"]
         membership_type = membership["membershipType"]
-        # Confirm manifest is loaded
-        get_manifest(headers, self.manifest_cache,
-                self.api_base, retry_request, self.timeout, required_types=BUNGIE_REQUIRED_DEFS)
-        save_blob(self.storage_conn_str, self.blob_container,
-                  f"{membership_id}-manifest.json", json.dumps(self.manifest_cache))
+        # Ensure manifest is loaded using ManifestCache
+        manifest_ready = self.manifest_cache.ensure_manifest()
         # Get character list
         characters_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=200"
         char_resp = retry_request(requests.get, characters_url, headers=headers, timeout=self.timeout)
@@ -179,8 +183,8 @@ class VaultAssistant:
             class_type = char["classType"]
             race_hash = char["raceHash"]
             class_name = CLASS_TYPE_MAP.get(class_type, str(class_type))
-            race_def, status_race = self.get_manifest_item(race_hash, "DestinyRaceDefinition")
-            race_name = race_def.get("displayProperties", {}).get("name") if status_race == 200 else str(race_hash)
+            race_def = self.manifest_cache.get_definitions("DestinyRaceDefinition", race_hash)
+            race_name = race_def.get("displayProperties", {}).get("name") if race_def else str(race_hash)
             character_summary[char_id] = {
                 "classType": class_type,
                 "className": class_name,
@@ -194,7 +198,7 @@ class VaultAssistant:
             "membershipId": membership_id,
             "membershipType": membership_type,
             "characters": character_summary,
-            "manifestReady": True
+            "manifestReady": manifest_ready
         }, 200
 
     def process_query(self, query: dict) -> dict:
@@ -386,21 +390,18 @@ class VaultAssistant:
         Returns:
             tuple: (definition dict, status_code)
         """
-        norm_hash = normalize_item_hash(item_hash)
-        definitions = self.manifest_cache.get("definitions", {})
-        search_types = [definition_type] if definition_type else None
-        definition, def_type = resolve_manifest_hash(norm_hash, definitions, search_types)
-        if not definition:
-            # Try fallback: sometimes hashes are passed as signed ints in string form
-            try:
-                alt_hash = normalize_item_hash(int(norm_hash))
-                if alt_hash != norm_hash:
-                    definition, def_type = resolve_manifest_hash(alt_hash, definitions, search_types)
-            except Exception:
-                pass
-        if not definition:
-            return {"error": "Item not found"}, 404
-        return definition, 200
+        self.manifest_cache.ensure_manifest()
+        if definition_type:
+            definition = self.manifest_cache.get_definition(definition_type, item_hash)
+            if definition:
+                return definition, 200
+            return None, 404
+        # If no type specified, search all required types
+        for def_type in BUNGIE_REQUIRED_DEFS:
+            definition = self.manifest_cache.get_definition(def_type, item_hash)
+            if definition:
+                return definition, 200
+        return None, 404
 
     def save_dim_backup(self, membership_id: str, dim_json_str: str) -> tuple[dict, int]:
         """
