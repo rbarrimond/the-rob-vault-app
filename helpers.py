@@ -29,7 +29,7 @@ from azure.storage.blob import BlobServiceClient
 from azure.data.tables import TableServiceClient
 from azure.core.exceptions import ResourceExistsError
 
-def normalize_item_hash(item_hash):
+def normalize_item_hash(item_hash: int | str) -> str:
     """
     Convert a Destiny 2 item hash to an unsigned 32-bit integer string for manifest lookup.
 
@@ -47,7 +47,7 @@ def normalize_item_hash(item_hash):
     except Exception:
         return str(item_hash)
 
-def retry_request(method, url, **kwargs):
+def retry_request(method: callable, url: str, **kwargs) -> requests.Response:
     """
     Perform an API request with exponential backoff retry logic.
 
@@ -82,7 +82,7 @@ def retry_request(method, url, **kwargs):
     logging.error("Max retries exceeded for request: %s", url)
     raise RuntimeError(f"Request failed after {tries} attempts: {url}")
 
-def compute_hash(content):
+def compute_hash(content: str) -> str:
     """
     Compute the SHA256 hash of a string.
 
@@ -94,7 +94,7 @@ def compute_hash(content):
     """
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-def save_blob(connection_string, container_name, blob_name, data):
+def save_blob(connection_string: str, container_name: str, blob_name: str, data: bytes | str) -> None:
     """
     Save data to Azure Blob Storage in the specified container and blob name.
 
@@ -113,7 +113,7 @@ def save_blob(connection_string, container_name, blob_name, data):
     container.upload_blob(blob_name, data, overwrite=True)
     logging.info("Saved blob: %s/%s", container_name, blob_name)
 
-def load_blob(connection_string, container_name, blob_name):
+def load_blob(connection_string: str, container_name: str, blob_name: str) -> bytes | None:
     """
     Load data from Azure Blob Storage in the specified container and blob name.
 
@@ -137,7 +137,7 @@ def load_blob(connection_string, container_name, blob_name):
                       container_name, blob_name, e)
         return None
 
-def save_table_entity(connection_string, table_name, entity):
+def save_table_entity(connection_string: str, table_name: str, entity: dict) -> None:
     """
     Save or upsert an entity to Azure Table Storage.
 
@@ -157,7 +157,7 @@ def save_table_entity(connection_string, table_name, entity):
     logging.info("Saved entity to table: %s, RowKey: %s",
                  table_name, entity.get("RowKey"))
 
-def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout, required_types=None):
+def get_manifest(headers: dict, manifest_cache: dict, api_base: str, retry_request_func: callable, timeout: int, required_types: list[str] | None = None) -> dict:
     """
     Fetch and cache Destiny 2 manifest definitions from the Bungie API.
 
@@ -302,7 +302,7 @@ def get_manifest(headers, manifest_cache, api_base, retry_request_func, timeout,
     manifest_cache["version"] = manifest_version
     return {"definitions": manifest, "version": manifest_version}
 
-def resolve_manifest_hash(item_hash, manifest_cache, definition_types=None):
+def resolve_manifest_hash(item_hash: int | str, manifest_cache: dict, definition_types: list[str] | None = None) -> tuple[dict | None, str | None]:
     """
     Attempt to resolve a hash against multiple manifest definition types.
 
@@ -325,7 +325,7 @@ def resolve_manifest_hash(item_hash, manifest_cache, definition_types=None):
             return defs[item_hash], def_type
     return None, None
 
-def save_dim_backup_blob(connection_string, table_name, membership_id, dim_json_str, timestamp=None):
+def save_dim_backup_blob(connection_string: str, table_name: str, membership_id: str, dim_json_str: str, timestamp: str | None = None) -> tuple[str, str, str]:
     """
     Save a DIM backup to blob storage and store its metadata in table storage.
 
