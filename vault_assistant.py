@@ -501,20 +501,17 @@ class VaultAssistant:
 
     def _get_manifest_definitions(self) -> dict:
         """
-        Fetch and return only required manifest definitions, using cache if available.
+        Fetch and return all required manifest definitions as a dict of dicts.
 
         Returns:
-            dict: Manifest definitions.
+            dict: {definition_type: {item_hash: definition_dict}}
         """
-        headers = {"X-API-Key": self.api_key}
-        return get_manifest(
-            headers,
-            self.manifest_cache,
-            self.api_base,
-            retry_request,
-            self.timeout,
-            required_types=BUNGIE_REQUIRED_DEFS
-        )
+        self.manifest_cache.ensure_manifest()
+        definitions = {}
+        for def_type in BUNGIE_REQUIRED_DEFS:
+            defs = self.manifest_cache.get_definitions(def_type)
+            definitions[def_type] = defs if defs else {}
+        return definitions
 
     def _decode_blob(self, source: str = 'vault', include_perks: bool = False, limit: int = None, offset: int = 0) -> list:
         """
@@ -536,8 +533,7 @@ class VaultAssistant:
         container = self._get_blob_container()
         blob_data = container.download_blob(blob_name).readall()
         items = json.loads(blob_data)
-        manifest = self._get_manifest_definitions()
-        definitions = manifest["definitions"] if isinstance(manifest, dict) and "definitions" in manifest else manifest
+        definitions = self._get_manifest_definitions()
         decoded_items = []
         if source == "vault":
             # Vault: flat list of items
@@ -549,8 +545,13 @@ class VaultAssistant:
                         decoded_items.append(item)
                         continue
                     item_hash = normalize_item_hash(item.get("itemHash"))
-                    defn, _ = resolve_manifest_hash(item_hash, definitions)
-                    if defn is None or (isinstance(defn, dict) and defn.get("error")):
+                    defn = None
+                    for def_type in BUNGIE_REQUIRED_DEFS:
+                        def_dict = definitions.get(def_type, {})
+                        defn = def_dict.get(item_hash)
+                        if defn:
+                            break
+                    if defn is None:
                         logging.warning(
                             "Item hash %s not found in manifest definitions.", item_hash)
                         decoded = {
@@ -583,7 +584,12 @@ class VaultAssistant:
                             enriched_items.append(item)
                             continue
                         item_hash = normalize_item_hash(item.get("itemHash"))
-                        defn, _ = resolve_manifest_hash(item_hash, definitions)
+                        defn = None
+                        for def_type in BUNGIE_REQUIRED_DEFS:
+                            def_dict = definitions.get(def_type, {})
+                            defn = def_dict.get(item_hash)
+                            if defn:
+                                break
                         if defn is None:
                             logging.warning(
                                 "Item hash %s not found in manifest definitions.", item_hash)
@@ -600,7 +606,6 @@ class VaultAssistant:
                             if display_props and isinstance(display_props, dict):
                                 name = display_props.get("name", "Unknown")
                             else:
-                                # Fallback: try 'itemName', 'title', or just use itemHash
                                 name = defn.get("itemName") or defn.get("title") or str(item.get("itemHash"))
                             type_val = defn.get("itemTypeDisplayName") or defn.get("itemType") or "Unknown"
                             decoded = {
@@ -629,7 +634,12 @@ class VaultAssistant:
                             enriched_items.append(item)
                             continue
                         item_hash = normalize_item_hash(item.get("itemHash"))
-                        defn, _ = resolve_manifest_hash(item_hash, definitions)
+                        defn = None
+                        for def_type in BUNGIE_REQUIRED_DEFS:
+                            def_dict = definitions.get(def_type, {})
+                            defn = def_dict.get(item_hash)
+                            if defn:
+                                break
                         if defn is None:
                             logging.warning(
                                 "Item hash %s not found in manifest definitions.", item_hash)
@@ -729,7 +739,13 @@ class VaultAssistant:
         """
         definitions = self._get_manifest_definitions()
         norm_hash = normalize_item_hash(item_hash)
-        item_def = definitions.get(norm_hash)
+        item_def = None
+        # Search all definition types for the item hash
+        for def_type in BUNGIE_REQUIRED_DEFS:
+            def_dict = definitions.get(def_type, {})
+            item_def = def_dict.get(norm_hash)
+            if item_def:
+                break
         if not item_def:
             logging.error("Item hash %s not found in manifest.", norm_hash)
             return None, 404
