@@ -392,13 +392,13 @@ class VaultAssistant:
         """
         self.manifest_cache.ensure_manifest()
         if definition_type:
-            definition = self.manifest_cache.get_definition(definition_type, item_hash)
+            definition = self.manifest_cache.get_definitions(definition_type, item_hash)
             if definition:
                 return definition, 200
             return None, 404
         # If no type specified, search all required types
         for def_type in BUNGIE_REQUIRED_DEFS:
-            definition = self.manifest_cache.get_definition(def_type, item_hash)
+            definition = self.manifest_cache.get_definitions(def_type, item_hash)
             if definition:
                 return definition, 200
         return None, 404
