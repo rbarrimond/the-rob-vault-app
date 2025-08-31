@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 import threading
 import zipfile
+import ctypes
 
 import requests
 
@@ -125,14 +126,21 @@ class ManifestCache:
             conn = self._connect()
             cursor = conn.cursor()
             if item_hash is not None:
-                norm_hash = normalize_item_hash(item_hash)
+                norm_hash = normalize_item_hash(item_hash)  # unsigned u32
+                signed_hash = ctypes.c_int32(int(norm_hash)).value  # two's complement signed form
                 try:
-                    cursor.execute(f"SELECT json FROM {definition_type} WHERE id=?", (norm_hash,))
+                    cursor.execute(
+                        f"SELECT json FROM {definition_type} WHERE id IN (?, ?) LIMIT 1",
+                        (signed_hash, norm_hash),
+                    )
                     row = cursor.fetchone()
                     if row:
                         return json.loads(row[0])
                 except Exception as e:
-                    logging.error("Manifest lookup failed for %s:%s: %s", definition_type, norm_hash, e)
+                    logging.error(
+                        "Manifest lookup failed for %s (u32=%s, i32=%s): %s",
+                        definition_type, norm_hash, signed_hash, e,
+                    )
                 return None
             else:
                 defs = {}
@@ -140,7 +148,8 @@ class ManifestCache:
                     cursor.execute(f"SELECT id, json FROM {definition_type}")
                     for row in cursor.fetchall():
                         try:
-                            defs[str(row[0])] = json.loads(row[1])
+                            uid = int(row[0]) & 0xFFFFFFFF  # normalize to unsigned u32 key
+                            defs[str(uid)] = json.loads(row[1])
                         except Exception:
                             continue
                 except Exception as e:
