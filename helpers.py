@@ -17,6 +17,7 @@ import hashlib
 import datetime
 import os
 import tempfile
+import ctypes
 import json
 import sqlite3
 import zlib
@@ -41,7 +42,7 @@ def normalize_item_hash(item_hash):
     try:
         # Accept int or str
         h = int(item_hash)
-        h &= 0xFFFFFFFF
+        h = ctypes.c_uint32(h).value
         return str(h)
     except Exception:
         return str(item_hash)
