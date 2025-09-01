@@ -19,7 +19,7 @@ import requests
 from azure.storage.blob import BlobServiceClient
 
 from bungie_session_manager import BungieSessionManager
-from helpers import (normalize_item_hash, resolve_manifest_hash,
+from helpers import (normalize_item_hash,
                      retry_request, save_blob, save_dim_backup_blob)
 from manifest_cache import ManifestCache
 
@@ -149,11 +149,9 @@ class VaultAssistant:
         }
         profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
         logging.info("Initializing user with access token.")
-        profile_resp = retry_request(
-            requests.get, profile_url, headers=headers, timeout=self.timeout)
+        profile_resp = retry_request(requests.get, profile_url, headers=headers, timeout=self.timeout)
         if not profile_resp.ok:
-            logging.error("Failed to get membership: status %d",
-                          profile_resp.status_code)
+            logging.error("Failed to get membership: status %d", profile_resp.status_code)
             return None, profile_resp.status_code
         profile_data = profile_resp.json()["Response"]
         if not profile_data.get("destinyMemberships"):
@@ -205,8 +203,7 @@ class VaultAssistant:
             dict: Agent response.
         """
         if not hasattr(self, 'db_agent') or self.db_agent is None:
-            raise AttributeError(
-                "VaultAssistant is missing a db_agent instance.")
+            raise AttributeError("VaultAssistant is missing a db_agent instance.")
         return self.db_agent.process_query(query)
 
     def get_vault(self) -> tuple[list, int] | tuple[None, int]:
@@ -562,7 +559,7 @@ class VaultAssistant:
                             "itemInstanceId": item.get("itemInstanceId"),
                         }
                         if include_perks:
-                            decoded["perks"] = self._extract_perks(defn, definitions)
+                            decoded["perks"] = self._extract_perks(defn)
                     decoded_items.append(decoded)
         elif source == "characters":
             # Characters: dict of characterId: {items: [...]}
@@ -608,7 +605,7 @@ class VaultAssistant:
                                 "itemInstanceId": item.get("itemInstanceId"),
                             }
                             if include_perks:
-                                decoded["perks"] = self._extract_perks(defn, definitions)
+                                decoded["perks"] = self._extract_perks(defn)
                         enriched_items.append(decoded)
                     decoded_items.append({
                         "characterId": char_id,
@@ -651,7 +648,7 @@ class VaultAssistant:
                                 "itemInstanceId": item.get("itemInstanceId"),
                             }
                             if include_perks:
-                                decoded["perks"] = self._extract_perks(defn, definitions)
+                                decoded["perks"] = self._extract_perks(defn)
                         enriched_items.append(decoded)
                     decoded_items.append({
                         "characterId": char_id,
@@ -660,13 +657,12 @@ class VaultAssistant:
         logging.info("Decode pass complete for source: %s", source)
         return decoded_items
 
-    def _extract_perks(self, defn, definitions):
+    def _extract_perks(self, defn):
         """
         Extract perks from an item definition.
 
         Args:
             defn (dict): Item manifest definition.
-            definitions (dict): Manifest definitions cache.
 
         Returns:
             list: List of perks dicts.
@@ -676,7 +672,7 @@ class VaultAssistant:
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
                 norm_plug_hash = normalize_item_hash(plug_hash)
-                plug_def, _ = resolve_manifest_hash(norm_plug_hash, definitions)
+                plug_def, _ = self.manifest_cache.resolve_manifest_hash(norm_plug_hash)
                 if plug_def:
                     perks.append({
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
@@ -741,16 +737,14 @@ class VaultAssistant:
         if not item_def:
             logging.error("Item hash %s not found in manifest.", norm_hash)
             return None, 404
-        item_info = self._build_item_base_info(
-            item_def, norm_hash, definitions)
+        item_info = self._build_item_base_info(item_def, norm_hash)
         if item_instance_id:
-            instance_info = self._build_item_instance_info(
-                item_instance_id, definitions)
+            instance_info = self._build_item_instance_info(item_instance_id)
             if instance_info:
                 item_info.update(instance_info)
         return item_info, 200
 
-    def _build_item_base_info(self, item_def, item_hash, definitions):
+    def _build_item_base_info(self, item_def, item_hash):
         """
         Build base information for a Destiny 2 item using its manifest definition.
         Includes display properties, type, tier, inventory info, masterwork/mods, stats, and perks.
@@ -795,8 +789,7 @@ class VaultAssistant:
         for socket in sockets_def:
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
-                plug_def, _ = resolve_manifest_hash(
-                    str(plug_hash), definitions)
+                plug_def, _ = self.manifest_cache.resolve_manifest_hash(plug_hash)
                 # Check for masterwork
                 if plug_def and plug_def.get("itemTypeDisplayName", "").lower().find("masterwork") != -1:
                     masterwork_info = {
@@ -828,7 +821,7 @@ class VaultAssistant:
         stats = {}
         stats_def = item_def.get("stats", {}).get("stats", {})
         for stat_hash, stat_obj in stats_def.items():
-            stat_def, _ = resolve_manifest_hash(stat_hash, definitions)
+            stat_def, _ = self.manifest_cache.resolve_manifest_hash(stat_hash)
             stat_name = stat_def.get("displayProperties", {}).get(
                 "name", stat_hash) if stat_def else stat_hash
             stats[stat_name] = stat_obj.get("value")
@@ -842,8 +835,7 @@ class VaultAssistant:
         for socket in socket_categories:
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
-                plug_def, _ = resolve_manifest_hash(
-                    str(plug_hash), definitions)
+                plug_def, _ = self.manifest_cache.resolve_manifest_hash(plug_hash)
                 if plug_def:
                     sockets.append({
                         "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
@@ -856,7 +848,7 @@ class VaultAssistant:
 
         return info
 
-    def _build_item_instance_info(self, item_instance_id, definitions):
+    def _build_item_instance_info(self, item_instance_id):
         """
         Build instance-specific information for a Destiny 2 item, such as rolled perks, stats, masterwork, and mods.
         Fetches instance data from the Bungie API using the item_instance_id.
@@ -899,8 +891,7 @@ class VaultAssistant:
         if inst_stats:
             stats_instance = {}
             for stat_hash, stat_obj in inst_stats.items():
-                stat_def, _ = resolve_manifest_hash(
-                    str(stat_hash), definitions)
+                stat_def, _ = self.manifest_cache.resolve_manifest_hash(stat_hash)
                 stat_name = stat_def.get("displayProperties", {}).get(
                     "name", stat_hash) if stat_def else stat_hash
                 stats_instance[stat_name] = stat_obj.get("value")
@@ -913,8 +904,7 @@ class VaultAssistant:
         for socket in inst_sockets:
             plug_hash = socket.get("plugHash")
             if plug_hash:
-                plug_def, _ = resolve_manifest_hash(
-                    str(plug_hash), definitions)
+                plug_def, _ = self.manifest_cache.resolve_manifest_hash(plug_hash)
                 if plug_def:
                     display_name = plug_def.get(
                         "itemTypeDisplayName", "").lower()
@@ -944,7 +934,7 @@ class VaultAssistant:
         if perks_instance:
             info["instancePerks"] = perks_instance
         if masterwork_instance:
-            info["instanceMasterwork"] = masterwork_instance
+            session = self.get_session()
         if mods_instance:
             info["instanceMods"] = mods_instance
         return info
