@@ -485,14 +485,21 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="save", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def save_object(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Save an object or file to storage using the assistant's save_object method.
-    Accepts JSON with base64 or string content, or multipart form-data (future).
 
-    Args:
-        req (func.HttpRequest): The HTTP request object. Expects JSON body with filename, content_type, and content.
-    Returns:
-        func.HttpResponse: JSON response with save result or error.
+    """
+    Save an object or file to Azure Blob Storage.
+
+    Expects a JSON POST body with:
+        - filename: Name of the file to save (string, required)
+        - content_type: MIME type of the file (string, optional)
+        - content: File content as a string or base64-encoded string (required)
+        - encoding: Encoding of the content ("base64" or "utf-8", optional)
+
+    Returns a JSON response with:
+        - message: Success message
+        - blob: Saved filename
+        - url: Blob URL
+    On error, returns a JSON response with an error message and appropriate status code.
     """
     logging.info("[save] POST request received.")
     try:
@@ -502,24 +509,46 @@ def save_object(req: func.HttpRequest) -> func.HttpResponse:
     if not body:
         return func.HttpResponse(json.dumps({"error": "Missing request body"}), status_code=400, mimetype="application/json")
 
-    filename = body.get("filename") or body.get("name") or "uploaded-object"
-    content_type = body.get("content_type") or body.get(
-        "mimetype") or "application/octet-stream"
+    # Validate required fields
+    filename = body.get("filename")
+    content_type = body.get("content_type")
     content = body.get("content")
-    if content is None:
-        return func.HttpResponse(json.dumps({"error": "Missing content in request"}), status_code=400, mimetype="application/json")
+    encoding = body.get("encoding")
 
-    # If content looks like base64, decode it
-    if body.get("encoding") == "base64":
+    if not filename or not content:
+        return func.HttpResponse(json.dumps({"error": "Missing filename or content in MIME object."}), status_code=400, mimetype="application/json")
+
+    # Handle encoding
+    if encoding == "base64":
         try:
             content = base64.b64decode(content)
         except Exception as e:
             return func.HttpResponse(json.dumps({"error": f"Base64 decode failed: {e}"}), status_code=400, mimetype="application/json")
-    elif isinstance(content, str):
-        content = content.encode("utf-8")
+    elif encoding == "utf-8" or encoding is None:
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+    else:
+        return func.HttpResponse(json.dumps({"error": f"Unsupported encoding: {encoding}"}), status_code=400, mimetype="application/json")
 
-    # Create a simple MIME-like object
+    # Create MIME-like object
     mime_obj = types.SimpleNamespace(
-        filename=filename, content_type=content_type, content=content)
+        filename=filename,
+        content_type=content_type or "application/octet-stream",
+        content=content
+    )
     result, status = assistant.save_object(mime_obj)
-    return func.HttpResponse(json.dumps(result), status_code=status, mimetype="application/json")
+
+    # Format response per OpenAPI spec
+    if status == 200:
+        response = {
+            "message": result.get("message", "Object saved successfully."),
+            "blob": result.get("blob", filename),
+            "url": result.get("url", "")
+        }
+        return func.HttpResponse(json.dumps(response), status_code=200, mimetype="application/json")
+    elif status == 400:
+        response = {"error": result.get("error", "Bad request (missing fields or invalid content)")}
+        return func.HttpResponse(json.dumps(response), status_code=400, mimetype="application/json")
+    else:
+        response = {"error": result.get("error", "Internal server error (failed to save object)")}
+        return func.HttpResponse(json.dumps(response), status_code=500, mimetype="application/json")
