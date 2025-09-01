@@ -188,7 +188,7 @@ class ManifestCache:
         for def_type in definition_types:
             defs = self.get_definitions(def_type, item_hash)
             if defs:
-                logging.debug("Manifest hash %s found in %s.", item_hash, def_type)
+                logging.info("Manifest hash %s found in %s.", item_hash, def_type)
                 return defs, def_type
             else:
                 logging.debug("Manifest hash %s not found in %s.", item_hash, def_type)
