@@ -1,3 +1,4 @@
+# pylint: disable=line-too-long,broad-exception-caught
 """
 Vault Assistant module for Destiny 2.
 
@@ -714,10 +715,9 @@ class VaultAssistant:
             logging.error("MIME object missing filename or content.")
             return {"error": "Missing filename or content in MIME object."}, 400
         try:
-            save_blob(self.storage_conn_str,
-                      self.blob_container, filename, content)
-            container_url = BlobServiceClient.from_connection_string(
-                self.storage_conn_str).get_container_client(self.blob_container).url
+            # Use save_blob helper with content_type
+            save_blob(self.storage_conn_str, self.blob_container, filename, content, content_type=content_type)
+            container_url = BlobServiceClient.from_connection_string(self.storage_conn_str).get_container_client(self.blob_container).url
             blob_url = f"{container_url}/{filename}"
             logging.info("Saved MIME object as blob: %s", blob_url)
             return {"message": "Object saved successfully.", "blob": filename, "url": blob_url}, 200
