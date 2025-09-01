@@ -29,3 +29,5 @@ azure-ai-inference
 azure-identity
 openai
 pyodbc
+# SQLAlchemy ORM for database models
+SQLAlchemy>=2.0
