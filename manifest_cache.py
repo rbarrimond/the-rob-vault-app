@@ -15,7 +15,7 @@ import ctypes
 import requests
 
 from helpers import normalize_item_hash
-from constants import BUNGIE_REQUIRED_DEFS, CLASS_TYPE_MAP
+from constants import BUNGIE_REQUIRED_DEFS
 
 
 class ManifestCache:
