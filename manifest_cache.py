@@ -181,11 +181,10 @@ class ManifestCache:
             tuple: (definition object, definition type) if found, otherwise (None, None).
         """
         if not definition_types:
-            # Import here to avoid circular import
             definition_types = BUNGIE_REQUIRED_DEFS
         item_hash = str(item_hash)
         for def_type in definition_types:
-            defs = self.get_definitions(def_type)
+            defs = self.get_definitions(def_type, item_hash)
             if defs and item_hash in defs:
                 return defs[item_hash], def_type
         return None, None
