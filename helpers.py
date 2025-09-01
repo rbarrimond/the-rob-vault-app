@@ -22,24 +22,6 @@ from azure.storage.blob import BlobServiceClient
 from azure.data.tables import TableServiceClient
 from azure.core.exceptions import ResourceExistsError
 
-def normalize_item_hash(item_hash: int | str) -> str:
-    """
-    Convert a Destiny 2 item hash to an unsigned 32-bit integer string for manifest lookup.
-
-    Args:
-        item_hash (int or str): The item hash to normalize.
-
-    Returns:
-        str: Unsigned 32-bit integer string representation of the item hash.
-    """
-    try:
-        # Accept int or str
-        h = int(item_hash)
-        h = ctypes.c_uint32(h).value
-        return str(h)
-    except Exception:
-        return str(item_hash)
-
 def retry_request(method: callable, url: str, **kwargs) -> requests.Response:
     """
     Perform an API request with exponential backoff retry logic.
@@ -74,6 +56,24 @@ def retry_request(method: callable, url: str, **kwargs) -> requests.Response:
             delay *= 2
     logging.error("Max retries exceeded for request: %s", url)
     raise RuntimeError(f"Request failed after {tries} attempts: {url}")
+
+def normalize_item_hash(item_hash: int | str) -> str:
+    """
+    Convert a Destiny 2 item hash to an unsigned 32-bit integer string for manifest lookup.
+
+    Args:
+        item_hash (int or str): The item hash to normalize.
+
+    Returns:
+        str: Unsigned 32-bit integer string representation of the item hash.
+    """
+    try:
+        # Accept int or str
+        h = int(item_hash)
+        h = ctypes.c_uint32(h).value
+        return str(h)
+    except Exception:
+        return str(item_hash)
 
 def compute_hash(content: str) -> str:
     """
@@ -134,6 +134,43 @@ def load_blob(connection_string: str, container_name: str, blob_name: str) -> by
                       container_name, blob_name, e)
         return None
 
+def blob_exists(connection_string: str, container_name: str, blob_name: str) -> bool:
+    """
+    Check if a blob exists in the specified Azure Blob Storage container.
+
+    Args:
+        connection_string (str): Azure Blob Storage connection string.
+        container_name (str): Name of the blob container.
+        blob_name (str): Name of the blob to check.
+
+    Returns:
+        bool: True if the blob exists, False otherwise.
+    """
+    blob_service = BlobServiceClient.from_connection_string(connection_string)
+    container = blob_service.get_container_client(container_name)
+    blob_client = container.get_blob_client(blob_name)
+    return blob_client.exists()
+
+def get_blob_last_modified(connection_string: str, container_name: str, blob_name: str):
+    """
+    Get the last modified datetime of a blob in Azure Blob Storage.
+
+    Args:
+        connection_string (str): Azure Blob Storage connection string.
+        container_name (str): Name of the blob container.
+        blob_name (str): Name of the blob.
+
+    Returns:
+        datetime or None: Last modified datetime if blob exists, else None.
+    """
+    blob_service = BlobServiceClient.from_connection_string(connection_string)
+    container = blob_service.get_container_client(container_name)
+    blob_client = container.get_blob_client(blob_name)
+    if blob_client.exists():
+        props = blob_client.get_blob_properties()
+        return props.last_modified.replace(tzinfo=None)
+    return None
+
 def save_table_entity(connection_string: str, table_name: str, entity: dict) -> None:
     """
     Save or upsert an entity to Azure Table Storage.
@@ -153,8 +190,6 @@ def save_table_entity(connection_string: str, table_name: str, entity: dict) -> 
     table_client.upsert_entity(entity=entity)
     logging.info("Saved entity to table: %s, RowKey: %s",
                  table_name, entity.get("RowKey"))
-
-
 
 def save_dim_backup_blob(connection_string: str, table_name: str, membership_id: str, dim_json_str: str, timestamp: str | None = None) -> tuple[str, str, str]:
     """

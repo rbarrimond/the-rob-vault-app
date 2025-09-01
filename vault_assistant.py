@@ -19,10 +19,13 @@ import requests
 from azure.storage.blob import BlobServiceClient
 
 from bungie_session_manager import BungieSessionManager
-from helpers import (normalize_item_hash,
-                     retry_request, save_blob, save_dim_backup_blob)
+from helpers import (
+    normalize_item_hash, blob_exists, get_blob_last_modified,
+    retry_request, load_blob, save_blob, save_dim_backup_blob
+)
 from manifest_cache import ManifestCache
 from constants import BUNGIE_REQUIRED_DEFS, CLASS_TYPE_MAP
+from models import ItemModel
 
 class VaultAssistant:
     """
@@ -222,21 +225,16 @@ class VaultAssistant:
         else:
             bungie_last_modified_dt = None
 
-        # Get blob last modified
+        # Get blob last modified using helpers
         blob_name = f"{membership_id}.json"
-        container = self._get_blob_container()
-        blob_client = container.get_blob_client(blob_name)
-        blob_exists = blob_client.exists()
-        blob_last_modified_dt = None
-        if blob_exists:
-            props = blob_client.get_blob_properties()
-            blob_last_modified_dt = props.last_modified.replace(tzinfo=None)
+        blob_exists_flag = blob_exists(self.storage_conn_str, self.blob_container, blob_name)
+        blob_last_modified_dt = get_blob_last_modified(self.storage_conn_str, self.blob_container, blob_name)
 
         # If blob exists and is newer than Bungie profile, use cached inventory
-        if blob_exists and bungie_last_modified_dt and blob_last_modified_dt and blob_last_modified_dt >= bungie_last_modified_dt:
+        if blob_exists_flag and bungie_last_modified_dt and blob_last_modified_dt and blob_last_modified_dt >= bungie_last_modified_dt:
             logging.info(
                 "Using cached vault inventory from blob for user: %s", membership_id)
-            blob_data = blob_client.download_blob().readall()
+            blob_data = load_blob(self.storage_conn_str, self.blob_container, blob_name)
             inventory = json.loads(blob_data)
             return inventory, 200
 
@@ -300,21 +298,16 @@ class VaultAssistant:
         else:
             bungie_last_modified_dt = None
 
-        # Get blob last modified
+        # Get blob last modified using helpers
         blob_name = f"{membership_id}-characters.json"
-        container = self._get_blob_container()
-        blob_client = container.get_blob_client(blob_name)
-        blob_exists = blob_client.exists()
-        blob_last_modified_dt = None
-        if blob_exists:
-            props = blob_client.get_blob_properties()
-            blob_last_modified_dt = props.last_modified.replace(tzinfo=None)
+        blob_exists_flag = blob_exists(self.storage_conn_str, self.blob_container, blob_name)
+        blob_last_modified_dt = get_blob_last_modified(self.storage_conn_str, self.blob_container, blob_name)
 
         # If blob exists and is newer than Bungie profile, use cached inventory
-        if blob_exists and bungie_last_modified_dt and blob_last_modified_dt and blob_last_modified_dt >= bungie_last_modified_dt:
+        if blob_exists_flag and bungie_last_modified_dt and blob_last_modified_dt and blob_last_modified_dt >= bungie_last_modified_dt:
             logging.info(
                 "Using cached character inventories from blob for user: %s", membership_id)
-            blob_data = blob_client.download_blob().readall()
+            blob_data = load_blob(self.storage_conn_str, self.blob_container, blob_name)
             inventory_data = json.loads(blob_data)
             return inventory_data, 200
 
@@ -329,7 +322,7 @@ class VaultAssistant:
         resp_json = char_resp.json()["Response"]
         inventory_data = resp_json["characterInventories"]["data"]
 
-        # Save inventories directly
+        # Save inventories directly using helpers
         save_blob(self.storage_conn_str, self.blob_container,
                   blob_name, json.dumps(inventory_data))
         logging.info(
@@ -692,216 +685,13 @@ class VaultAssistant:
         Returns:
             tuple: (item info dict, status_code)
         """
-        definitions = self._get_manifest_definitions()
-        norm_hash = normalize_item_hash(item_hash)
-        item_def = None
-        # Search all definition types for the item hash
-        for def_type in BUNGIE_REQUIRED_DEFS:
-            def_dict = definitions.get(def_type, {})
-            item_def = def_dict.get(norm_hash)
-            if item_def:
-                break
-        if not item_def:
-            logging.error("Item hash %s not found in manifest.", norm_hash)
-            return None, 404
-        item_info = self._build_item_base_info(item_def, norm_hash)
-        if item_instance_id:
-            instance_info = self._build_item_instance_info(item_instance_id)
-            if instance_info:
-                item_info.update(instance_info)
-        return item_info, 200
-
-    def _build_item_base_info(self, item_def, item_hash):
-        """
-        Build base information for a Destiny 2 item using its manifest definition.
-        Includes display properties, type, tier, inventory info, masterwork/mods, stats, and perks.
-
-        Args:
-            item_def (dict): The manifest definition for the item.
-            item_hash (str|int): The normalized item hash.
-            definitions (dict): The manifest definitions cache.
-
-        Returns:
-            dict: Dictionary of item base information.
-        """
-        info = {
-            "name": item_def.get("displayProperties", {}).get("name", "Unknown"),
-            "description": item_def.get("displayProperties", {}).get("description", ""),
-            "type": item_def.get("itemTypeDisplayName", "Unknown"),
-            "icon": item_def.get("displayProperties", {}).get("icon", None),
-            "tier": item_def.get("inventory", {}).get("tierTypeName", "Unknown"),
+        raw_data = {
             "itemHash": item_hash,
-            "itemType": item_def.get("itemType"),
-            "itemSubType": item_def.get("itemSubType"),
-            "itemCategoryHashes": item_def.get("itemCategoryHashes", []),
-            "itemTypeDisplayName": item_def.get("itemTypeDisplayName"),
-            "itemTypeAndTierDisplayName": item_def.get("itemTypeAndTierDisplayName"),
-            "sourceString": item_def.get("sourceString"),
-            "collectibleHash": item_def.get("collectibleHash"),
+            "itemInstanceId": item_instance_id
         }
+        item_model = ItemModel.from_raw_data(raw_data, self.manifest_cache, item_instance_id)
+        if item_model.itemName == "Unknown":
+            logging.error("Item hash %s not found in manifest.", item_hash)
+            return None, 404
+        return item_model.model_dump(), 200
 
-        # Inventory/Stack Info
-        inventory = item_def.get("inventory", {})
-        info["maxStackSize"] = inventory.get("maxStackSize")
-        info["stackUniqueLabel"] = inventory.get("stackUniqueLabel")
-        info["transferStatus"] = inventory.get("transferStatus")
-        info["expirationTooltip"] = inventory.get("expirationTooltip")
-        info["isInstanceItem"] = inventory.get("isInstanceItem")
-        info["nonTransferrable"] = inventory.get("nonTransferrable")
-
-        # Masterwork/Mod Info (from sockets)
-        masterwork_info = None
-        mod_info = []
-        sockets_def = item_def.get("sockets", {}).get("socketEntries", [])
-        for socket in sockets_def:
-            plug_hash = socket.get("singleInitialItemHash")
-            if plug_hash:
-                plug_def, _ = self.manifest_cache.resolve_manifest_hash(plug_hash)
-                # Check for masterwork
-                if plug_def and plug_def.get("itemTypeDisplayName", "").lower().find("masterwork") != -1:
-                    masterwork_info = {
-                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
-                        "description": plug_def.get("displayProperties", {}).get("description", ""),
-                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
-                        "plugItemHash": plug_hash
-                    }
-                # Check for mods
-                if plug_def and plug_def.get("itemTypeDisplayName", "").lower().find("mod") != -1:
-                    mod_info.append({
-                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
-                        "description": plug_def.get("displayProperties", {}).get("description", ""),
-                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
-                        "plugItemHash": plug_hash
-                    })
-        if masterwork_info:
-            info["masterwork"] = masterwork_info
-        if mod_info:
-            info["mods"] = mod_info
-
-        # Seasonal/Power Cap
-        info["powerCapHash"] = item_def.get("quality", {}).get("powerCapHash")
-        info["seasonHash"] = item_def.get("seasonHash")
-        info["seasonalContent"] = item_def.get("seasonalContent")
-        info["quality"] = item_def.get("quality")
-
-        # Stats
-        stats = {}
-        stats_def = item_def.get("stats", {}).get("stats", {})
-        for stat_hash, stat_obj in stats_def.items():
-            stat_def, _ = self.manifest_cache.resolve_manifest_hash(stat_hash)
-            stat_name = stat_def.get("displayProperties", {}).get(
-                "name", stat_hash) if stat_def else stat_hash
-            stats[stat_name] = stat_obj.get("value")
-        if stats:
-            info["stats"] = stats
-
-        # Perks (sockets)
-        sockets = []
-        socket_categories = item_def.get(
-            "sockets", {}).get("socketEntries", [])
-        for socket in socket_categories:
-            plug_hash = socket.get("singleInitialItemHash")
-            if plug_hash:
-                plug_def, _ = self.manifest_cache.resolve_manifest_hash(plug_hash)
-                if plug_def:
-                    sockets.append({
-                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
-                        "description": plug_def.get("displayProperties", {}).get("description", ""),
-                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
-                        "plugItemHash": plug_hash
-                    })
-        if sockets:
-            info["perks"] = sockets
-
-        return info
-
-    def _build_item_instance_info(self, item_instance_id):
-        """
-        Build instance-specific information for a Destiny 2 item, such as rolled perks, stats, masterwork, and mods.
-        Fetches instance data from the Bungie API using the item_instance_id.
-
-        Args:
-            item_instance_id (str): The Destiny 2 item instance ID.
-            definitions (dict): The manifest definitions cache.
-
-        Returns:
-            dict | None: Dictionary of instance-specific item info, or None if not found.
-        """
-        session = self.get_session()
-        access_token = session["access_token"]
-        membership_id = session["membership_id"]
-        headers_auth = {
-            "Authorization": f"Bearer {access_token}",
-            "X-API-Key": self.api_key
-        }
-        # Try to get membership type
-        profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
-        profile_resp = retry_request(
-            requests.get, profile_url, headers=headers_auth, timeout=self.timeout)
-        if not profile_resp.ok:
-            return None
-        profile_data = profile_resp.json().get("Response", {})
-        if not profile_data.get("destinyMemberships"):
-            return None
-        membership_type = profile_data["destinyMemberships"][0].get(
-            "membershipType", "1")
-        # Fetch item instance data
-        instance_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/Item/{item_instance_id}/?components=300,302,304"
-        instance_resp = retry_request(
-            requests.get, instance_url, headers=headers_auth, timeout=self.timeout)
-        if not instance_resp.ok:
-            return None
-        instance_data = instance_resp.json().get("Response", {})
-        info = {}
-        # Instance stats
-        inst_stats = instance_data.get("itemStats", {}).get("stats", {})
-        if inst_stats:
-            stats_instance = {}
-            for stat_hash, stat_obj in inst_stats.items():
-                stat_def, _ = self.manifest_cache.resolve_manifest_hash(stat_hash)
-                stat_name = stat_def.get("displayProperties", {}).get(
-                    "name", stat_hash) if stat_def else stat_hash
-                stats_instance[stat_name] = stat_obj.get("value")
-            info["instanceStats"] = stats_instance
-        # Instance perks (sockets), masterwork, mods
-        inst_sockets = instance_data.get("sockets", {}).get("sockets", [])
-        perks_instance = []
-        masterwork_instance = None
-        mods_instance = []
-        for socket in inst_sockets:
-            plug_hash = socket.get("plugHash")
-            if plug_hash:
-                plug_def, _ = self.manifest_cache.resolve_manifest_hash(plug_hash)
-                if plug_def:
-                    display_name = plug_def.get(
-                        "itemTypeDisplayName", "").lower()
-                    # Perks
-                    perks_instance.append({
-                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
-                        "description": plug_def.get("displayProperties", {}).get("description", ""),
-                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
-                        "plugItemHash": plug_hash
-                    })
-                    # Masterwork
-                    if "masterwork" in display_name:
-                        masterwork_instance = {
-                            "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
-                            "description": plug_def.get("displayProperties", {}).get("description", ""),
-                            "icon": plug_def.get("displayProperties", {}).get("icon", None),
-                            "plugItemHash": plug_hash
-                        }
-                    # Mods
-                    if "mod" in display_name:
-                        mods_instance.append({
-                            "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
-                            "description": plug_def.get("displayProperties", {}).get("description", ""),
-                            "icon": plug_def.get("displayProperties", {}).get("icon", None),
-                            "plugItemHash": plug_hash
-                        })
-        if perks_instance:
-            info["instancePerks"] = perks_instance
-        if masterwork_instance:
-            session = self.get_session()
-        if mods_instance:
-            info["instanceMods"] = mods_instance
-        return info
