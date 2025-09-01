@@ -1,10 +1,16 @@
 # pylint: disable=missing-module-docstring, missing-function-docstring, invalid-name, broad-except, line-too-long
 # pylint: disable=unused-argument
 """
-Azure Function App for Destiny 2 Vault Assistant
+Azure Function App for Destiny 2 Vault Assistant.
 
-This module provides HTTP-triggered Azure Functions for initializing the assistant, handling authentication,
-fetching Destiny 2 vault and character data, and accessing manifest items from the Bungie API.
+Exposes HTTP-triggered Azure Functions for:
+- Health checks and diagnostics
+- OAuth authentication and session management
+- Fetching Destiny 2 vault and character data
+- Decoding and accessing manifest items
+- DIM backup management
+- Querying the Vault Sentinel agent
+All endpoints return JSON or HTML responses suitable for web and API clients.
 """
 
 import json
@@ -51,6 +57,11 @@ def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
     """
     Health check endpoint for Azure monitoring.
     Returns process diagnostics including Python version, platform, CPU, memory, and key environment variables.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: JSON response with diagnostics or error.
     """
     try:
         process = psutil.Process()
@@ -83,6 +94,11 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
     """
     Handles Bungie OAuth callback.
     Exchanges the authorization code for access and refresh tokens, stores the session, and returns an HTML page to initialize the assistant.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: HTML response for OAuth completion.
     """
     logging.info("[auth] GET request received.")
     code = req.params.get("code")
@@ -132,6 +148,11 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
     """
     Initializes the assistant for the user.
     Authenticates the user and fetches their Destiny 2 character summary.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: JSON response with user summary or error.
     """
     logging.info("[assistant/init] POST request received.")
     result, status = assistant.initialize_user()
@@ -145,6 +166,11 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
 def get_session(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the current session information including access token and membership ID.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: JSON response with session info or error.
     """
     try:
         session_data = assistant.get_session()
@@ -158,6 +184,11 @@ def get_session(req: func.HttpRequest) -> func.HttpResponse:
 def session_token(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the current access token and membership ID.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: JSON response with token info or error.
     """
     try:
         result, status_code = assistant.get_session_token()
@@ -172,6 +203,11 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
     """
     Refreshes the access token using the stored refresh token via the assistant.
     Returns the new access token.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: JSON response with new access token or error.
     """
     logging.info("[token/refresh] GET request received.")
     try:
@@ -195,6 +231,11 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
 def vault(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the user's Destiny 2 vault inventory items.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object. Accepts 'limit' and 'offset' query params for pagination.
+    Returns:
+        func.HttpResponse: JSON response with inventory items or error.
     """
     logging.info("[vault] GET request received.")
     try:
@@ -219,6 +260,11 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
 def characters(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the user's Destiny 2 character equipment data.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object. Accepts 'limit' and 'offset' query params for pagination.
+    Returns:
+        func.HttpResponse: JSON response with character equipment or error.
     """
     logging.info("[characters] GET request received.")
     try:
@@ -251,7 +297,12 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
 def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the decoded version of the user's Destiny 2 vault inventory.
-    Optional query param: includePerks (bool)
+    Optional query param: includePerks (bool), limit, offset.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: JSON response with decoded inventory or error.
     """
     logging.info("[vault/decoded] GET request received.")
     include_perks = req.params.get("includePerks", "false").lower() == "true"
@@ -275,7 +326,12 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
 def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the decoded version of the user's Destiny 2 character equipment.
-    Optional query param: includePerks (bool)
+    Optional query param: includePerks (bool), limit, offset.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: JSON response with decoded equipment or error.
     """
     logging.info("[characters/decoded] GET request received.")
     include_perks = req.params.get("includePerks", "false").lower() == "true"
@@ -298,7 +354,12 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
 def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the manifest definition for a given Destiny 2 item.
-    Requires 'hash' query parameter.
+    Requires 'hash' query parameter and optional 'type'.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: JSON response with manifest item or error.
     """
     logging.info("[manifest/item] GET request received.")
     hash_val = req.params.get("hash")
@@ -310,7 +371,8 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
         int(hash_val)
     except Exception:
         return func.HttpResponse("'hash' must be an integer.", status_code=400)
-    definition_data, status = assistant.get_manifest_item(hash_str)
+    type_val = req.params.get("type")
+    definition_data, status = assistant.get_manifest_item(hash_str, type_val)
     if definition_data is None or (isinstance(definition_data, dict) and definition_data.get("error")):
         logging.error("[manifest/item] Item not found in manifest. Status: %d", status)
         return func.HttpResponse("Item not found in manifest", status_code=status)
@@ -325,6 +387,11 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
     """
     Uploads a DIM backup and stores it in blob storage with metadata.
     Expects 'membership_id' and 'dim_backup' in the POST body.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: JSON response with backup result or error.
     """
     logging.info("[dim/backup] POST request received.")
     try:
@@ -346,6 +413,11 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
 def dim_list(req: func.HttpRequest) -> func.HttpResponse:
     """
     Lists available DIM backups stored in blob storage for the current membership ID.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: JSON response with backup list or error.
     """
     logging.info("[dim/list] GET request received.")
     try:
@@ -370,6 +442,11 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
 def query_agent(req: func.HttpRequest) -> func.HttpResponse:
     """
     Accepts a JSON query conforming to the Vault Sentinel schema and returns the agent's response.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object. Expects JSON body with query.
+    Returns:
+        func.HttpResponse: JSON response with agent result or error.
     """
     logging.info("[query] POST request received.")
     try:
@@ -390,6 +467,11 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
     """
     [DEPRECATED] This endpoint is deprecated and no longer serves static files.
     Use a dedicated static file host or CDN instead.
+
+    Args:
+        req (func.HttpRequest): The HTTP request object.
+    Returns:
+        func.HttpResponse: 410 Gone response.
     """
     filename = req.route_params.get("filename")
     logging.warning(
@@ -406,6 +488,11 @@ def save_object(req: func.HttpRequest) -> func.HttpResponse:
     """
     Save an object or file to storage using the assistant's save_object method.
     Accepts JSON with base64 or string content, or multipart form-data (future).
+
+    Args:
+        req (func.HttpRequest): The HTTP request object. Expects JSON body with filename, content_type, and content.
+    Returns:
+        func.HttpResponse: JSON response with save result or error.
     """
     logging.info("[save] POST request received.")
     try:

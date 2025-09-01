@@ -12,9 +12,9 @@ paths:
       summary: Health check endpoint for Azure monitoring with diagnostics
       operationId: healthCheck
       responses:
-        '200':
+        "200":
           description: Health and diagnostics returned
-        '500':
+        "500":
           description: Health check error
   /auth:
     get:
@@ -22,7 +22,7 @@ paths:
       operationId: oauthCallback
       security: []
       responses:
-        '200':
+        "200":
           description: Auth complete
   /assistant/init:
     post:
@@ -39,38 +39,38 @@ paths:
                 access_token:
                   type: string
       responses:
-        '200':
+        "200":
           description: Assistant initialized
-        '400':
+        "400":
           description: Failed to initialize user
   /session:
     get:
       summary: Get current session info
       operationId: getSessionInfo
       responses:
-        '200':
+        "200":
           description: Session info returned
-        '500':
+        "500":
           description: Failed to get session data
   /session/token:
     get:
       summary: Get access token and membership ID
       operationId: getSessionToken
       responses:
-        '200':
+        "200":
           description: Token returned
-        '500':
+        "500":
           description: Failed to get session token
   /token/refresh:
     get:
       summary: Refresh the Bungie access token
       operationId: refreshBungieToken
       responses:
-        '200':
+        "200":
           description: Access token refreshed
-        '403':
+        "403":
           description: No refresh token found. Please re-authenticate.
-        '500':
+        "500":
           description: Failed to refresh token
   /vault:
     get:
@@ -92,9 +92,9 @@ paths:
             minimum: 0
           description: Number of items to skip before starting to return results (pagination)
       responses:
-        '200':
+        "200":
           description: Vault inventory returned
-        '500':
+        "500":
           description: Failed to get vault inventory
   /vault/decoded:
     get:
@@ -122,9 +122,9 @@ paths:
             minimum: 0
           description: Number of items to skip before starting to return results (pagination)
       responses:
-        '200':
+        "200":
           description: Decoded vault inventory
-        '500':
+        "500":
           description: Failed to decode vault
   /characters:
     get:
@@ -146,9 +146,9 @@ paths:
             minimum: 0
           description: Number of items to skip before starting to return results per character (pagination)
       responses:
-        '200':
+        "200":
           description: Character equipment returned
-        '500':
+        "500":
           description: Failed to get character equipment
   /characters/decoded:
     get:
@@ -176,9 +176,9 @@ paths:
             minimum: 0
           description: Number of items to skip before starting to return results per character (pagination)
       responses:
-        '200':
+        "200":
           description: Decoded character equipment
-        '500':
+        "500":
           description: Failed to decode character equipment
   /manifest/item:
     get:
@@ -190,12 +190,104 @@ paths:
           required: true
           schema:
             type: integer
+        - in: query
+          name: type
+          required: false
+          schema:
+            type: string
+            enum:
+              [
+                DestinyAchievementDefinition,
+                DestinyActivityDefinition,
+                DestinyActivityDifficultyTierCollectionDefinition,
+                DestinyActivityFamilyDefinition,
+                DestinyActivityGraphDefinition,
+                DestinyActivityInteractableDefinition,
+                DestinyActivityLoadoutRestrictionDefinition,
+                DestinyActivityModeDefinition,
+                DestinyActivityModifierDefinition,
+                DestinyActivitySelectableSkullCollectionDefinition,
+                DestinyActivitySelectableSkullExclusionGroupDefinition,
+                DestinyActivitySkullCategoryDefinition,
+                DestinyActivitySkullCollectionDefinition,
+                DestinyActivitySkullSubcategoryDefinition,
+                DestinyActivityTypeDefinition,
+                DestinyArtifactDefinition,
+                DestinyBondDefinition,
+                DestinyBreakerTypeDefinition,
+                DestinyChecklistDefinition,
+                DestinyClassDefinition,
+                DestinyCollectibleDefinition,
+                DestinyDamageTypeDefinition,
+                DestinyDestinationDefinition,
+                DestinyEnergyTypeDefinition,
+                DestinyEquipableItemSetDefinition,
+                DestinyEquipmentSlotDefinition,
+                DestinyEventCardDefinition,
+                DestinyFactionDefinition,
+                DestinyFireteamFinderActivityGraphDefinition,
+                DestinyFireteamFinderActivitySetDefinition,
+                DestinyFireteamFinderConstantsDefinition,
+                DestinyFireteamFinderLabelDefinition,
+                DestinyFireteamFinderLabelGroupDefinition,
+                DestinyFireteamFinderOptionDefinition,
+                DestinyFireteamFinderOptionGroupDefinition,
+                DestinyGenderDefinition,
+                DestinyGlobalConstantsDefinition,
+                DestinyGuardianRankConstantsDefinition,
+                DestinyGuardianRankDefinition,
+                DestinyHistoricalStatsDefinition,
+                DestinyIconDefinition,
+                DestinyInventoryBucketDefinition,
+                DestinyInventoryItemConstantsDefinition,
+                DestinyInventoryItemDefinition,
+                DestinyItemCategoryDefinition,
+                DestinyItemFilterDefinition,
+                DestinyItemTierTypeDefinition,
+                DestinyLoadoutColorDefinition,
+                DestinyLoadoutConstantsDefinition,
+                DestinyLoadoutIconDefinition,
+                DestinyLoadoutNameDefinition,
+                DestinyLocationDefinition,
+                DestinyLoreDefinition,
+                DestinyMaterialRequirementSetDefinition,
+                DestinyMedalTierDefinition,
+                DestinyMetricDefinition,
+                DestinyMilestoneDefinition,
+                DestinyObjectiveDefinition,
+                DestinyPlaceDefinition,
+                DestinyPlugSetDefinition,
+                DestinyPowerCapDefinition,
+                DestinyPresentationNodeDefinition,
+                DestinyProgressionDefinition,
+                DestinyProgressionLevelRequirementDefinition,
+                DestinyRaceDefinition,
+                DestinyRecordDefinition,
+                DestinyReportReasonCategoryDefinition,
+                DestinyRewardSourceDefinition,
+                DestinySackRewardItemListDefinition,
+                DestinySandboxPatternDefinition,
+                DestinySandboxPerkDefinition,
+                DestinySeasonDefinition,
+                DestinySeasonPassDefinition,
+                DestinySocialCommendationDefinition,
+                DestinySocialCommendationNodeDefinition,
+                DestinySocketCategoryDefinition,
+                DestinySocketTypeDefinition,
+                DestinyStatDefinition,
+                DestinyStatGroupDefinition,
+                DestinyTraitDefinition,
+                DestinyUnlockDefinition,
+                DestinyVendorDefinition,
+                DestinyVendorGroupDefinition,
+              ]
+          description: The type of manifest definition to look up
       responses:
-        '200':
+        "200":
           description: Manifest item definition returned
-        '400':
+        "400":
           description: Missing or invalid parameters
-        '404':
+        "404":
           description: Item not found in manifest
   /dim/backup:
     post:
@@ -213,22 +305,22 @@ paths:
                 dim_backup:
                   type: string
       responses:
-        '200':
+        "200":
           description: DIM backup saved
-        '400':
+        "400":
           description: Missing membership_id or dim_backup
-        '500':
+        "500":
           description: Failed to save DIM backup
   /dim/list:
     get:
       summary: List all DIM backups
       operationId: listDimBackups
       responses:
-        '200':
+        "200":
           description: DIM backups listed
-        '400':
+        "400":
           description: No stored membership ID found
-        '500':
+        "500":
           description: Failed to list DIM backups
   /save:
     post:
@@ -258,7 +350,7 @@ paths:
                   description: Encoding of the content (e.g., "base64" or "utf-8")
                   example: "base64"
       responses:
-        '200':
+        "200":
           description: Object saved successfully
           content:
             application/json:
@@ -274,7 +366,7 @@ paths:
                   url:
                     type: string
                     example: https://<storage-account>.blob.core.windows.net/vault-data/myfile.txt
-        '400':
+        "400":
           description: Bad request (missing fields or invalid content)
           content:
             application/json:
@@ -284,7 +376,7 @@ paths:
                   error:
                     type: string
                     example: Missing filename or content in MIME object.
-        '500':
+        "500":
           description: Internal server error (failed to save object)
           content:
             application/json:
@@ -330,13 +422,13 @@ paths:
                 - sort
                 - limit
       responses:
-        '200':
+        "200":
           description: Query processed successfully
           content:
             application/json:
               schema:
                 type: object
-        '400':
+        "400":
           description: Invalid query or agent error
           content:
             application/json:
