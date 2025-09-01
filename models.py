@@ -1,5 +1,11 @@
+"""
+Data models for Bungie Destiny vault and character inventory management.
+Includes Pydantic models for Item, Character, and Vault entities.
+"""
+from typing import Dict, List, Optional
+
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+
 
 class Item(BaseModel):
     """
