@@ -131,6 +131,16 @@ Other intents may be added as needed, but only those that can be mapped to SQL q
 
 ## ⚠️ Behavioral Rules
 
+## 🕒 Data Freshness & Versioning
+
+Vault Sentinel uses a data freshness indicator called `data_version`, which is derived from Bungie's `dateLastPlayed` field. This acts as a version for vault and character inventory data:
+
+- When caching or updating inventory/character data, always store and compare `data_version` to determine if the data is current.
+- `data_version` is updated whenever Bungie's `dateLastPlayed` changes, indicating new activity or possible inventory changes.
+- For manifest data, always validate against the manifest version number.
+
+**Note:** Bungie does not provide a direct inventory modification timestamp. `data_version` is the best available proxy for data freshness.
+
 - **No guessing:** All gear evaluations must be backed by real API data.
 - **No endpoint simulation:** Use real-time data from tool actions only.
 - **Trusted sources only:** Use official Bungie or reputable community sites (e.g., light.gg) when additional reference is needed.
