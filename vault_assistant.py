@@ -50,14 +50,6 @@ BUNGIE_REQUIRED_DEFS = [
     "DestinyRaceDefinition",               # Human, Awoken, Exo
 ]
 
-# Maps manifest class names to user-friendly values
-CLASS_NAME_MAP = {
-    "0": "Titan",
-    "1": "Hunter",
-    "2": "Warlock",
-    # Add more mappings if Bungie adds new classes
-}
-
 # Maps classType integer values to user-friendly class names
 CLASS_TYPE_MAP = {
     0: "Titan",
