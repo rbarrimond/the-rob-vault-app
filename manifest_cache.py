@@ -38,6 +38,7 @@ class ManifestCache:
     def __del__(self):
         self.close()
 
+    # pylint: disable=too-many-arguments
     def __init__(self, api_base: str, headers: dict, retry_request_func, timeout: int, storage_path: str = None):
         self.api_base = api_base
         self.headers = headers
