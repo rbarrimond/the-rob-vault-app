@@ -18,7 +18,7 @@ import requests
 from azure.storage.blob import BlobServiceClient
 
 from bungie_session_manager import BungieSessionManager
-from helpers import (get_manifest, normalize_item_hash, resolve_manifest_hash,
+from helpers import (normalize_item_hash, resolve_manifest_hash,
                      retry_request, save_blob, save_dim_backup_blob)
 from manifest_cache import ManifestCache
 
