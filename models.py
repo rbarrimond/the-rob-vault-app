@@ -3,6 +3,7 @@ Data models for Bungie Destiny vault and character inventory management.
 Includes Pydantic models for Item, Character, and Vault entities.
 """
 from typing import Dict, List, Optional
+from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -31,6 +32,7 @@ class Character(BaseModel):
     name: str
     classType: str
     items: List[Item] = []
+    data_version: Optional[datetime] = None  # Bungie dateLastPlayed as datetime for validation
 
 class Vault(BaseModel):
     """
@@ -38,3 +40,4 @@ class Vault(BaseModel):
     Contains items accessible to all characters.
     """
     items: List[Item] = []
+    data_version: Optional[datetime] = None  # Bungie dateLastPlayed as datetime for validation
