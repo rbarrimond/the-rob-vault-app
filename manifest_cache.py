@@ -1,3 +1,4 @@
+# pylint: disable=broad-exception-caught, line-too-long
 """
 ManifestCache module for Destiny 2 manifest management.
 Encapsulates manifest data loading, saving, and lookup logic.
@@ -14,6 +15,8 @@ import ctypes
 import requests
 
 from helpers import normalize_item_hash
+from vault_assistant import BUNGIE_REQUIRED_DEFS
+
 
 class ManifestCache:
     """
@@ -60,11 +63,13 @@ class ManifestCache:
                 timeout=self.timeout
             )
             if not index_resp.ok:
-                logging.error("Manifest index fetch failed: %d", index_resp.status_code)
+                logging.error("Manifest index fetch failed: %d",
+                              index_resp.status_code)
                 return False
             index_data = index_resp.json().get("Response", {})
             manifest_version = index_data.get("version")
-            sqlite_path = index_data.get("mobileWorldContentPaths", {}).get("en")
+            sqlite_path = index_data.get(
+                "mobileWorldContentPaths", {}).get("en")
             if not sqlite_path:
                 logging.error("Manifest index missing SQLite path.")
                 return False
@@ -75,18 +80,22 @@ class ManifestCache:
             url = f"https://www.bungie.net{sqlite_path}"
             resp = self.retry_request(requests.get, url, timeout=self.timeout)
             if not resp.ok:
-                logging.error("Manifest ZIP download failed: %d", resp.status_code)
+                logging.error("Manifest ZIP download failed: %d",
+                              resp.status_code)
                 return False
             with tempfile.NamedTemporaryFile(delete=False, mode="wb") as tmp_file:
                 tmp_file.write(resp.content)
                 zip_path = tmp_file.name
             try:
                 with zipfile.ZipFile(zip_path, 'r') as zf:
-                    manifest_files = [info for info in zf.infolist() if info.filename.endswith('.content')]
+                    manifest_files = [info for info in zf.infolist(
+                    ) if info.filename.endswith('.content')]
                     if not manifest_files:
-                        logging.error("No .content file found in manifest ZIP.")
+                        logging.error(
+                            "No .content file found in manifest ZIP.")
                         return False
-                    manifest_info = max(manifest_files, key=lambda info: info.file_size)
+                    manifest_info = max(
+                        manifest_files, key=lambda info: info.file_size)
                     with open(self.storage_path, 'wb') as sqlite_file:
                         with zf.open(manifest_info.filename, 'r') as src:
                             sqlite_file.write(src.read())
@@ -107,7 +116,8 @@ class ManifestCache:
             if self._conn:
                 return self._conn
             if not os.path.exists(self.storage_path):
-                raise FileNotFoundError(f"Manifest DB not found at {self.storage_path}")
+                raise FileNotFoundError(
+                    f"Manifest DB not found at {self.storage_path}")
             self._conn = sqlite3.connect(self.storage_path)
             return self._conn
 
@@ -127,7 +137,8 @@ class ManifestCache:
             cursor = conn.cursor()
             if item_hash is not None:
                 norm_hash = normalize_item_hash(item_hash)  # unsigned u32
-                signed_hash = ctypes.c_int32(int(norm_hash)).value  # two's complement signed form
+                # two's complement signed form
+                signed_hash = ctypes.c_int32(int(norm_hash)).value
                 try:
                     cursor.execute(
                         f"SELECT json FROM {definition_type} WHERE id IN (?, ?) LIMIT 1",
@@ -148,13 +159,36 @@ class ManifestCache:
                     cursor.execute(f"SELECT id, json FROM {definition_type}")
                     for row in cursor.fetchall():
                         try:
-                            uid = int(row[0]) & 0xFFFFFFFF  # normalize to unsigned u32 key
+                            # normalize to unsigned u32 key
+                            uid = int(row[0]) & 0xFFFFFFFF
                             defs[str(uid)] = json.loads(row[1])
                         except Exception:
                             continue
                 except Exception as e:
-                    logging.error("Manifest get_definitions failed for %s: %s", definition_type, e)
+                    logging.error(
+                        "Manifest get_definitions failed for %s: %s", definition_type, e)
                 return defs
+
+    def resolve_manifest_hash(self, item_hash: int | str, definition_types: list[str] = None) -> tuple[dict | None, str | None]:
+        """
+        Attempt to resolve a hash against multiple manifest definition types.
+
+        Args:
+            item_hash (str or int): The item hash to resolve.
+            definition_types (list, optional): List of definition types to search. If None, all loaded types are used.
+
+        Returns:
+            tuple: (definition object, definition type) if found, otherwise (None, None).
+        """
+        if not definition_types:
+            # Import here to avoid circular import
+            definition_types = BUNGIE_REQUIRED_DEFS
+        item_hash = str(item_hash)
+        for def_type in definition_types:
+            defs = self.get_definitions(def_type)
+            if defs and item_hash in defs:
+                return defs[item_hash], def_type
+        return None, None
 
     def close(self) -> None:
         """
