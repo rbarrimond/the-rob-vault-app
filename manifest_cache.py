@@ -180,13 +180,18 @@ class ManifestCache:
         Returns:
             tuple: (definition object, definition type) if found, otherwise (None, None).
         """
+        logging.debug("Attempting to resolve manifest hash: %s across types: %s", 
+                      item_hash, definition_types if definition_types else BUNGIE_REQUIRED_DEFS)
         if not definition_types:
             definition_types = BUNGIE_REQUIRED_DEFS
         item_hash = str(item_hash)
         for def_type in definition_types:
             defs = self.get_definitions(def_type, item_hash)
-            if defs and item_hash in defs:
-                return defs[item_hash], def_type
+            if defs:
+                logging.debug("Manifest hash %s found in %s.", item_hash, def_type)
+                return defs, def_type
+            else:
+                logging.debug("Manifest hash %s not found in %s.", item_hash, def_type)
         return None, None
 
     def close(self) -> None:
