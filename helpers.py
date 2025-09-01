@@ -155,28 +155,6 @@ def save_table_entity(connection_string: str, table_name: str, entity: dict) -> 
                  table_name, entity.get("RowKey"))
 
 
-def resolve_manifest_hash(item_hash: int | str, manifest_cache: dict, definition_types: list[str] | None = None) -> tuple[dict | None, str | None]:
-    """
-    Attempt to resolve a hash against multiple manifest definition types.
-
-    Args:
-        item_hash (str or int): The item hash to resolve.
-        manifest_cache (dict): Manifest cache containing definitions.
-        definition_types (list, optional): List of definition types to search. If None, all loaded
-            types are used.
-
-    Returns:
-        tuple: (definition object, definition type) if found, otherwise (None, None).
-    """
-    # Use all loaded definition types if not provided
-    if not definition_types:
-        definition_types = list(manifest_cache.keys())
-    item_hash = str(item_hash)
-    for def_type in definition_types:
-        defs = manifest_cache.get(def_type, {})
-        if defs and item_hash in defs:
-            return defs[item_hash], def_type
-    return None, None
 
 def save_dim_backup_blob(connection_string: str, table_name: str, membership_id: str, dim_json_str: str, timestamp: str | None = None) -> tuple[str, str, str]:
     """
