@@ -14,8 +14,8 @@ import ctypes
 
 import requests
 
-from helpers import normalize_item_hash
-from constants import BUNGIE_REQUIRED_DEFS
+from helpers import normalize_item_hash, retry_request
+from constants import BUNGIE_REQUIRED_DEFS, API_KEY, BUNGIE_API_BASE, REQUEST_TIMEOUT
 
 
 class ManifestCache:
@@ -39,7 +39,14 @@ class ManifestCache:
         self.close()
 
     # pylint: disable=too-many-arguments
-    def __init__(self, api_base: str, headers: dict, retry_request_func, timeout: int, storage_path: str = None):
+    def __init__(
+        self,
+        api_base: str = BUNGIE_API_BASE,
+        headers: dict = {"X-API-Key": API_KEY},
+        retry_request_func=retry_request,
+        timeout: int = REQUEST_TIMEOUT,
+        storage_path: str = None
+    ):
         self.api_base = api_base
         self.headers = headers
         self.retry_request = retry_request_func

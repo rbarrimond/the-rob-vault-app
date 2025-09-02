@@ -1,3 +1,4 @@
+#pylint: disable=broad-except, line-too-long
 """
 BungieSessionManager: Handles OAuth authentication, token refresh, and session management for Destiny 2 Vault Assistant.
 
@@ -7,13 +8,19 @@ Responsibilities:
 - Store/retrieve session info in Azure Table Storage
 - Provide current session (access token, membership ID)
 """
-import os
 import logging
+import os
 from datetime import datetime
+
 import requests
+from azure.core.exceptions import (AzureError, ResourceExistsError,
+                                   ResourceNotFoundError)
 from azure.data.tables import TableServiceClient
-from azure.core.exceptions import ResourceNotFoundError, AzureError, ResourceExistsError
+
+from constants import (API_KEY, BUNGIE_API_BASE,
+                       REQUEST_TIMEOUT, STORAGE_CONNECTION_STRING, TABLE_NAME)
 from helpers import retry_request
+
 
 class BungieSessionManager:
     """
@@ -26,7 +33,14 @@ class BungieSessionManager:
     - Provide current session (access token, membership ID)
     """
 
-    def __init__(self, api_key: str, storage_conn_str: str, table_name: str, api_base: str, timeout: int):
+    def __init__(
+        self,
+        api_key: str = API_KEY,
+        storage_conn_str: str = STORAGE_CONNECTION_STRING,
+        table_name: str = TABLE_NAME,
+        api_base: str = BUNGIE_API_BASE,
+        timeout: int = REQUEST_TIMEOUT
+    ):
         """
         Initialize BungieSessionManager with configuration and dependencies.
 

@@ -70,19 +70,8 @@ class VaultAssistant:
         self.blob_container = blob_container
         self.api_base = api_base
         self.timeout = timeout
-        self.manifest_cache = ManifestCache(
-            api_base=api_base,
-            headers={"X-API-Key": api_key},
-            retry_request_func=retry_request,
-            timeout=timeout
-        )
-        self.session_manager = BungieSessionManager(
-            api_key=api_key,
-            storage_conn_str=storage_conn_str,
-            table_name=table_name,
-            api_base=api_base,
-            timeout=timeout
-        )
+        self.manifest_cache = ManifestCache()
+        self.session_manager = BungieSessionManager()
         self.db_agent = None  # Ensure db_agent attribute always exists
 
     # Session/auth methods are now delegated to BungieSessionManager
@@ -720,4 +709,4 @@ class VaultAssistant:
             logging.error("Item hash %s not found in manifest.", item_hash)
             return None, 404
         return item_model.model_dump(), 200
-
+    
