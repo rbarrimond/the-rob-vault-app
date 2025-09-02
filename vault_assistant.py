@@ -117,26 +117,18 @@ class VaultAssistant:
         """
         session = self.get_session()
         access_token = session["access_token"]
+        membership_info = self.session_manager.get_membership_info(access_token)
+        if not membership_info:
+            logging.error("No Destiny memberships found for user.")
+            return None, 404
+        membership_id, membership_type = membership_info
+        # Ensure manifest is loaded using ManifestCache
+        manifest_ready = self.manifest_cache.ensure_manifest()
+        # Get character list
         headers = {
             "Authorization": f"Bearer {access_token}",
             "X-API-Key": self.api_key
         }
-        profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
-        logging.info("Initializing user with access token.")
-        profile_resp = retry_request(requests.get, profile_url, headers=headers, timeout=self.timeout)
-        if not profile_resp.ok:
-            logging.error("Failed to get membership: status %d", profile_resp.status_code)
-            return None, profile_resp.status_code
-        profile_data = profile_resp.json()["Response"]
-        if not profile_data.get("destinyMemberships"):
-            logging.error("No Destiny memberships found for user.")
-            return None, 404
-        membership = profile_data["destinyMemberships"][0]
-        membership_id = membership["membershipId"]
-        membership_type = membership["membershipType"]
-        # Ensure manifest is loaded using ManifestCache
-        manifest_ready = self.manifest_cache.ensure_manifest()
-        # Get character list
         characters_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=200"
         char_resp = retry_request(requests.get, characters_url, headers=headers, timeout=self.timeout)
         if not char_resp.ok:
@@ -191,23 +183,16 @@ class VaultAssistant:
         """
         session = self.get_session()
         access_token = session["access_token"]
+        membership_info = self.get_membership_info(access_token)
+        if not membership_info:
+            logging.error("No Destiny memberships found for user.")
+            return None, 404
+        membership_id, membership_type = membership_info
+
         headers = {
             "Authorization": f"Bearer {access_token}",
             "X-API-Key": self.api_key
         }
-        profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
-        logging.info("Fetching vault for user.")
-        profile_resp = retry_request(
-            requests.get, profile_url, headers=headers, timeout=self.timeout)
-        if not profile_resp.ok:
-            logging.error("Failed to get membership: status %d",
-                          profile_resp.status_code)
-            return None, profile_resp.status_code
-        profile_data = profile_resp.json()["Response"]
-        membership = profile_data["destinyMemberships"][0]
-        membership_id = membership["membershipId"]
-        membership_type = membership["membershipType"]
-
         # Get Bungie profile lastModified
         get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
         profile_detail_resp = retry_request(
@@ -267,18 +252,11 @@ class VaultAssistant:
             "Authorization": f"Bearer {access_token}",
             "X-API-Key": self.api_key
         }
-        profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
-        logging.info("Fetching character inventories for user.")
-        profile_resp = retry_request(
-            requests.get, profile_url, headers=headers, timeout=self.timeout)
-        if not profile_resp.ok:
-            logging.error("Failed to get membership: status %d",
-                          profile_resp.status_code)
-            return None, profile_resp.status_code
-        profile_data = profile_resp.json()["Response"]
-        membership = profile_data["destinyMemberships"][0]
-        membership_id = membership["membershipId"]
-        membership_type = membership["membershipType"]
+        membership_info = self.get_membership_info(access_token)
+        if not membership_info:
+            logging.error("No Destiny memberships found for user.")
+            return None, 404
+        membership_id, membership_type = membership_info
 
         # Get Bungie profile lastModified
         get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
