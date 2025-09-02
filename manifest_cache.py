@@ -15,7 +15,7 @@ import ctypes
 import requests
 
 from helpers import normalize_item_hash, retry_request
-from constants import BUNGIE_REQUIRED_DEFS, API_KEY, BUNGIE_API_BASE, REQUEST_TIMEOUT
+from constants import BUNGIE_REQUIRED_DEFS, BUNGIE_API_BASE, REQUEST_TIMEOUT, DEFAULT_HEADERS
 
 
 class ManifestCache:
@@ -38,16 +38,16 @@ class ManifestCache:
     def __del__(self):
         self.close()
 
-    # pylint: disable=too-many-arguments, dangerous-default-value
+
     def __init__(
         self,
         api_base: str = BUNGIE_API_BASE,
-        headers: dict = {"X-API-Key": API_KEY},
+        headers: dict = None,
         timeout: int = REQUEST_TIMEOUT,
         storage_path: str = None
     ):
         self.api_base = api_base
-        self.headers = headers
+        self.headers = headers or DEFAULT_HEADERS
         self.timeout = timeout
         self.storage_path = storage_path or "/tmp/manifest.content"
         self.version = None

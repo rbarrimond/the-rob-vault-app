@@ -7,6 +7,8 @@ import os
 # API and Azure configuration constants
 BUNGIE_API_BASE = "https://www.bungie.net/Platform"
 API_KEY = os.getenv("BUNGIE_API_KEY")
+# Default headers for Bungie API requests
+DEFAULT_HEADERS = {"X-API-Key": API_KEY}
 STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
 BLOB_CONTAINER = "vault-data"
 TABLE_NAME = "VaultSessions"
