@@ -214,8 +214,7 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
         session = assistant.get_session()
         refresh_token_val = session.get("RefreshToken")
         if not refresh_token_val:
-            logging.warning(
-                "[token/refresh] No refresh token found. Re-authentication required.")
+            logging.warning("[token/refresh] No refresh token found. Re-authentication required.")
             return func.HttpResponse("No refresh token found. Please re-authenticate.", status_code=403)
         token_data, _ = assistant.refresh_token(refresh_token_val)
         logging.info("[token/refresh] Successfully refreshed token.")
@@ -292,7 +291,6 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps(paged_equipment, indent=2), mimetype="application/json")
 
 
-
 @app.route(route="vault/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """
@@ -319,7 +317,6 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error("[vault/decoded] Failed to decode vault: %s", e)
         return func.HttpResponse("Failed to decode vault.", status_code=500)
-
 
 
 @app.route(route="characters/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
