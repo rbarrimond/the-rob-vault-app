@@ -188,7 +188,7 @@ class ManifestCache:
         Returns:
             tuple: (definition object, definition type) if found, otherwise (None, None).
         """
-        logging.debug("Attempting to resolve manifest hash: %s across types: %s", 
+        logging.debug("Attempting to resolve manifest hash: %s across types: %s",
                       item_hash, definition_types if definition_types else BUNGIE_REQUIRED_DEFS)
         if not definition_types:
             definition_types = BUNGIE_REQUIRED_DEFS
