@@ -25,6 +25,14 @@ from helpers import (
 )
 from manifest_cache import ManifestCache
 from constants import BUNGIE_REQUIRED_DEFS, CLASS_TYPE_MAP
+from constants import (
+    API_KEY,
+    STORAGE_CONNECTION_STRING,
+    TABLE_NAME,
+    BLOB_CONTAINER,
+    BUNGIE_API_BASE,
+    REQUEST_TIMEOUT
+)
 from models import ItemModel
 
 class VaultAssistant:
@@ -36,7 +44,15 @@ class VaultAssistant:
     secure storage and scalable operations.
     """
 
-    def __init__(self, api_key: str, storage_conn_str: str, table_name: str, blob_container: str, api_base: str, timeout: int):
+    def __init__(
+        self,
+        api_key: str = API_KEY,
+        storage_conn_str: str = STORAGE_CONNECTION_STRING,
+        table_name: str = TABLE_NAME,
+        blob_container: str = BLOB_CONTAINER,
+        api_base: str = BUNGIE_API_BASE,
+        timeout: int = REQUEST_TIMEOUT
+    ):
         """
         Initialize VaultAssistant with configuration and dependencies.
 
@@ -45,7 +61,6 @@ class VaultAssistant:
             storage_conn_str (str): Azure Storage connection string.
             table_name (str): Azure Table name for session storage.
             blob_container (str): Azure Blob container name.
-            manifest_cache (dict): Manifest cache for Destiny 2 definitions (removed).
             api_base (str): Bungie API base URL.
             timeout (int): Request timeout in seconds.
         """

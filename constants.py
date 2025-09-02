@@ -2,6 +2,16 @@
 Module containing constants for Destiny 2 Vault Assistant.
 """
 
+import os
+
+# API and Azure configuration constants
+BUNGIE_API_BASE = "https://www.bungie.net/Platform"
+API_KEY = os.getenv("BUNGIE_API_KEY")
+STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+BLOB_CONTAINER = "vault-data"
+TABLE_NAME = "VaultSessions"
+REQUEST_TIMEOUT = 10  # seconds
+
 # Bungie manifest definition keys required for decoding and optimizing character loadouts
 BUNGIE_REQUIRED_DEFS = [
     # --- Item and Inventory ---

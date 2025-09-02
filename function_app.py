@@ -13,39 +13,21 @@ Exposes HTTP-triggered Azure Functions for:
 All endpoints return JSON or HTML responses suitable for web and API clients.
 """
 
+import base64
 import json
 import logging
 import os
 import platform
 import sys
 import types
-import base64
 
 import azure.functions as func
 import psutil
-from azure.data.tables import TableServiceClient
 
 from vault_assistant import VaultAssistant
 
 app = func.FunctionApp()
-
-# Constants and configuration
-BUNGIE_API_BASE = "https://www.bungie.net/Platform"
-API_KEY = os.getenv("BUNGIE_API_KEY")
-STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-BLOB_CONTAINER = "vault-data"
-TABLE_NAME = "VaultSessions"
-REQUEST_TIMEOUT = 10  # seconds
-
-manifest_cache = {}
-assistant = VaultAssistant(
-    api_key=API_KEY,
-    storage_conn_str=STORAGE_CONNECTION_STRING,
-    table_name=TABLE_NAME,
-    blob_container=BLOB_CONTAINER,
-    api_base=BUNGIE_API_BASE,
-    timeout=REQUEST_TIMEOUT
-)
+assistant = VaultAssistant()
 
 # ----------------------
 # Route Handler Functions
@@ -418,12 +400,8 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
     """
     logging.info("[dim/list] GET request received.")
     try:
-        table_service = TableServiceClient.from_connection_string(
-            STORAGE_CONNECTION_STRING)
-        table_client = table_service.get_table_client(TABLE_NAME)
-        entity = table_client.get_entity(
-            partition_key="AuthSession", row_key="last")
-        membership_id = entity.get("membershipId")
+        session = assistant.get_session()
+        membership_id = session.get("membershipId")
         if not membership_id:
             logging.warning("[dim/list] No stored membership ID found.")
             return func.HttpResponse("No stored membership ID found.", status_code=400)
