@@ -86,10 +86,13 @@ class ItemModel(BaseModel):
         itemType = item_def.get("itemTypeDisplayName", "Unknown")
         itemTier = item_def.get("inventory", {}).get("tierTypeName", "Unknown")
         stats = {}
-        stats_def = item_def.get("stats", {}).get("stats", {})
+        stats_def = item_def["stats"]["stats"]
         for stat_hash, stat_obj in stats_def.items():
             stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash)
-            stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
+            if stat_def and "displayProperties" in stat_def and "name" in stat_def["displayProperties"]:
+                stat_name = stat_def["displayProperties"]["name"]
+            else:
+                stat_name = stat_hash
             stats[stat_name] = stat_obj.get("value")
         if item_instance_id:
             instance_info = cls._build_instance_info(item_instance_id, session_manager, manifest_cache)
@@ -135,7 +138,7 @@ class ItemModel(BaseModel):
             requests.get, profile_url, headers=headers_auth, timeout=session_manager.timeout)
         if not profile_resp.ok:
             return None
-        profile_data = profile_resp.json().get("Response", {})
+        profile_data = profile_resp.json()["Response"]
         if not profile_data.get("destinyMemberships"):
             return None
         membership_type = profile_data["destinyMemberships"][0].get(
@@ -146,10 +149,10 @@ class ItemModel(BaseModel):
             requests.get, instance_url, headers=headers_auth, timeout=session_manager.timeout)
         if not instance_resp.ok:
             return None
-        instance_data = instance_resp.json().get("Response", {})
+        instance_data = instance_resp.json()["Response"]
 
         info = {}
-        inst_stats = instance_data.get("stats", {}).get("data", {}).get("stats", {})
+        inst_stats = instance_data["stats"]["data"]["stats"]
         if inst_stats:
             stats_instance = {}
             for stat_hash, stat_obj in inst_stats.items():
