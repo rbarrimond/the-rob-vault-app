@@ -43,13 +43,11 @@ class ManifestCache:
         self,
         api_base: str = BUNGIE_API_BASE,
         headers: dict = {"X-API-Key": API_KEY},
-        retry_request_func=retry_request,
         timeout: int = REQUEST_TIMEOUT,
         storage_path: str = None
     ):
         self.api_base = api_base
         self.headers = headers
-        self.retry_request = retry_request_func
         self.timeout = timeout
         self.storage_path = storage_path or "/tmp/manifest.content"
         self.version = None
@@ -64,7 +62,7 @@ class ManifestCache:
             bool: True if manifest is ready, False otherwise.
         """
         with self._lock:
-            index_resp = self.retry_request(
+            index_resp = retry_request(
                 requests.get,
                 f"{self.api_base}/Destiny2/Manifest/",
                 headers=self.headers,
@@ -86,7 +84,7 @@ class ManifestCache:
                 return True
             # Download ZIP
             url = f"https://www.bungie.net{sqlite_path}"
-            resp = self.retry_request(requests.get, url, timeout=self.timeout)
+            resp = retry_request(requests.get, url, timeout=self.timeout)
             if not resp.ok:
                 logging.error("Manifest ZIP download failed: %d",
                               resp.status_code)
