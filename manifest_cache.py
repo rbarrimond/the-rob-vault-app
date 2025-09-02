@@ -38,7 +38,7 @@ class ManifestCache:
     def __del__(self):
         self.close()
 
-    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-arguments, dangerous-default-value
     def __init__(
         self,
         api_base: str = BUNGIE_API_BASE,
