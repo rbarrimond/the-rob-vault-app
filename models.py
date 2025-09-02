@@ -149,7 +149,7 @@ class ItemModel(BaseModel):
         instance_data = instance_resp.json().get("Response", {})
 
         info = {}
-        inst_stats = instance_data.get("itemStats", {}).get("stats", {})
+        inst_stats = instance_data.get("stats", {}).get("data", {}).get("stats", {})
         if inst_stats:
             stats_instance = {}
             for stat_hash, stat_obj in inst_stats.items():
@@ -157,12 +157,12 @@ class ItemModel(BaseModel):
                 stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
                 stats_instance[stat_name] = stat_obj.get("value")
             info["instanceStats"] = stats_instance
-        inst_sockets = instance_data.get("sockets", {}).get("sockets", [])
+        inst_sockets = instance_data.get("sockets", {}).get("socketEntries", [])
         perks_instance = []
         masterwork_instance = None
         mods_instance = []
         for socket in inst_sockets:
-            plug_hash = socket.get("plugHash")
+            plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
                 plug_def, _ = manifest_cache.resolve_manifest_hash(plug_hash)
                 if plug_def:

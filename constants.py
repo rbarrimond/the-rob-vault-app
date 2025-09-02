@@ -11,8 +11,10 @@ BUNGIE_REQUIRED_DEFS = [
     "DestinyItemTierTypeDefinition",       # Exotic, Legendary, etc.
 
     # --- Stats and Sockets ---
+    "DestinyStatDefinition",               # item stats (impact, range, etc.)
     "DestinyStatGroupDefinition",          # stat groupings for items
     "DestinyPlugSetDefinition",            # reusable mods/perks
+    "DestinySocketCategoryDefinition",     # socket categories (e.g., primary, special)
     "DestinySocketTypeDefinition",         # socket compatibility
 
     # --- Perks, Intrinsics, Traits ---
