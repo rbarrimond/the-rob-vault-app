@@ -27,10 +27,10 @@ class BungieSessionManager:
     Handles OAuth authentication, token refresh, and session management for Destiny 2 Vault Assistant.
 
     Responsibilities:
-    - Exchange OAuth code for access/refresh tokens
-    - Refresh tokens when expired
-    - Store/retrieve session info in Azure Table Storage
-    - Provide current session (access token, membership ID)
+        - Exchange OAuth code for access/refresh tokens
+        - Refresh tokens when expired
+        - Store/retrieve session info in Azure Table Storage
+        - Persist and provide current session (access token, membershipId, membershipType)
     """
 
     def __init__(
@@ -124,10 +124,13 @@ class BungieSessionManager:
         """
         Exchange OAuth code for access/refresh token, store in Table Storage, and return token data.
 
+        Persists membershipId and membershipType in Table Storage for future session retrieval.
+
         Args:
-            code (str): OAuth authorization code.
+            code (str): OAuth authorization code received from Bungie OAuth flow.
+
         Returns:
-            dict: Token data from Bungie API.
+            dict: Token data from Bungie API, including access and refresh tokens.
         """
         token_url = "https://www.bungie.net/platform/app/oauth/token/"
         payload = {
@@ -142,24 +145,18 @@ class BungieSessionManager:
             requests.post, token_url, data=payload, headers=headers, timeout=self.timeout)
         response.raise_for_status()
         token_data = response.json()
-        # Fetch membershipId
+        # Fetch membershipId and membershipType
         membership_id_val = ""
+        membership_type_val = ""
         try:
-            headers_profile = {
-                "Authorization": f"Bearer {token_data.get('access_token', '')}",
-                "X-API-Key": self.api_key
-            }
-            profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
-            profile_resp = retry_request(
-                requests.get, profile_url, headers=headers_profile, timeout=self.timeout)
-            if profile_resp.ok:
-                profile_data = profile_resp.json().get("Response", {})
-                if profile_data.get("destinyMemberships"):
-                    membership_id_val = profile_data["destinyMemberships"][0].get("membershipId", "")
+            access_token_val = token_data.get('access_token', '')
+            membership_info = self._get_membership_info(access_token_val)
+            if membership_info:
+                membership_id_val, membership_type_val = membership_info
         except requests.RequestException as e:
-            logging.warning("[session] Could not retrieve membershipId due to network error: %s", e)
+            logging.warning("[session] Could not retrieve membership info due to network error: %s", e)
         except (KeyError, ValueError) as e:
-            logging.warning("[session] Could not parse membershipId: %s", e)
+            logging.warning("[session] Could not parse membership info: %s", e)
         # Store in Table Storage
         table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
         table_client = table_service.get_table_client(self.table_name)
@@ -176,7 +173,8 @@ class BungieSessionManager:
             "RefreshToken": token_data.get("refresh_token", ""),
             "ExpiresIn": str(token_data.get("expires_in", "3600")),
             "membershipId": membership_id_val,
-            "IssuedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+            "membershipType": membership_type_val,
+            "IssuedAt": datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         }
         table_client.upsert_entity(entity=token_entity)
         logging.info("[session] Token data stored in table storage for session.")
@@ -184,17 +182,21 @@ class BungieSessionManager:
 
     def get_session(self) -> dict:
         """
-        Retrieve stored session info including access token and membership ID.
+        Retrieve stored session info including access token, membershipId, and membershipType.
 
         Returns:
-            dict: Session info with access token and membership ID.
+            dict: Session info with keys:
+                - access_token (str): OAuth access token
+                - membershipId (str): Destiny membership ID
+                - membershipType (str): Destiny membership type
         """
         entity = self.ensure_token_valid()
         if not entity:
-            return {"access_token": None, "membership_id": None}
+            return {"access_token": None, "membership_id": None, "membership_type": None}
         return {
             "access_token": entity["AccessToken"],
-            "membership_id": entity["membershipId"]
+            "membership_id": entity["membershipId"],
+            "membership_type": entity["membershipType"],
         }
 
     def refresh_token(self, refresh_token_val: str) -> tuple[dict, int]:
@@ -202,9 +204,12 @@ class BungieSessionManager:
         Refresh access token using the stored refresh token.
 
         Args:
-            refresh_token_val (str): The refresh token value.
+            refresh_token_val (str): The refresh token value from previous authentication.
+
         Returns:
-            tuple: (token_data, status_code)
+            tuple:
+                - token_data (dict): New token data from Bungie API
+                - status_code (int): HTTP status code (200 if successful)
         """
         logging.info("Refreshing access token using refresh token.")
         token_url = "https://www.bungie.net/platform/app/oauth/token/"
@@ -221,3 +226,32 @@ class BungieSessionManager:
         token_data = response.json()
         logging.info("Access token refreshed successfully.")
         return token_data, 200
+
+    def _get_membership_info(self, access_token: str) -> tuple[str, str] | None:
+        """
+        (Private) Fetch the Destiny membershipId and membershipType for the current user using the access token.
+        Used only for initial token exchange and refresh. Clients should use get_session() for membership info.
+
+        Args:
+            access_token (str): OAuth access token for Bungie API.
+
+        Returns:
+            tuple:
+                - membershipId (str): Destiny membership ID
+                - membershipType (str): Destiny membership type
+            or None if not found.
+        """
+        headers_profile = {
+            "Authorization": f"Bearer {access_token}",
+            "X-API-Key": self.api_key
+        }
+        profile_url = f"{self.api_base}/User/GetMembershipsForCurrentUser/"
+        profile_resp = retry_request(
+            requests.get, profile_url, headers=headers_profile, timeout=self.timeout)
+        if not profile_resp.ok:
+            return None
+        profile_data = profile_resp.json().get("Response", {})
+        if not profile_data.get("destinyMemberships"):
+            return None
+        membership = profile_data["destinyMemberships"][0]
+        return membership.get("membershipId", ""), membership.get("membershipType", "1")
