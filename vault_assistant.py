@@ -212,10 +212,8 @@ class VaultAssistant:
             logging.error("Failed to get profile details: status %d",
                           profile_detail_resp.status_code)
             return None, profile_detail_resp.status_code
-        profile_detail = profile_detail_resp.json(
-        )["Response"].get("profile", {}).get("data", {})
-        bungie_last_modified = profile_detail.get(
-            "dateLastPlayed") or profile_detail.get("lastModified")
+        profile_detail = profile_detail_resp.json()["Response"].get("profile", {}).get("data", {})
+        bungie_last_modified = profile_detail.get("dateLastPlayed") or profile_detail.get("lastModified")
         if bungie_last_modified:
             try:
                 bungie_last_modified_dt = datetime.strptime(
@@ -246,12 +244,10 @@ class VaultAssistant:
             logging.error(
                 "Failed to get vault inventory: status %d", inv_resp.status_code)
             return None, inv_resp.status_code
-        inventory = inv_resp.json(
-        )["Response"]["profileInventory"]["data"]["items"]
+        inventory = inv_resp.json()["Response"]["profileInventory"]["data"]["items"]
         save_blob(self.storage_conn_str, self.blob_container,
                   blob_name, json.dumps(inventory))
-        logging.info(
-            "Vault inventory fetched and saved for user: %s", membership_id)
+        logging.info("Vault inventory fetched and saved for user: %s", membership_id)
         return inventory, 200
 
     def get_characters(self) -> tuple[dict, int] | tuple[None, int]:
@@ -397,11 +393,9 @@ class VaultAssistant:
                      len(blob_names), membership_id)
         return {"backups": blob_names}, 200
 
-    # ...existing code...
-
     def decode_vault(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
         """
-        Decode the vault inventory using manifest definitions. Optionally include perks. Supports pagination.
+        Decode the vault inventory using ItemModel.from_raw_data() for each item. Optionally include perks. Supports pagination.
 
         Args:
             include_perks (bool): If True, include perks for each item.
@@ -411,7 +405,24 @@ class VaultAssistant:
         Returns:
             tuple: (decoded items list, status_code)
         """
-        return self._decode_blob(source="vault", include_perks=include_perks, limit=limit, offset=offset), 200
+        session = self.get_session()
+        membership_id = session["membership_id"]
+        blob_name = f"{membership_id}.json"
+        blob_data = load_blob(self.storage_conn_str, self.blob_container, blob_name)
+        if blob_data is None:
+            logging.error("Vault blob not found for user: %s", membership_id)
+            return [], 404
+        items = json.loads(blob_data)
+        paged_items = items[offset:offset + limit] if limit is not None else items[offset:]
+        decoded_items = []
+        for item in paged_items:
+            item_instance_id = item.get("itemInstanceId")
+            item_model = ItemModel.from_raw_data(item, self.session_manager, self.manifest_cache, item_instance_id)
+            decoded = item_model.model_dump()
+            if include_perks and hasattr(item_model, "perks"):
+                decoded["perks"] = item_model.perks
+            decoded_items.append(decoded)
+        return decoded_items, 200
 
     def decode_characters(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
         """
@@ -689,7 +700,7 @@ class VaultAssistant:
             "itemHash": item_hash,
             "itemInstanceId": item_instance_id
         }
-        item_model = ItemModel.from_raw_data(raw_data, self.manifest_cache, item_instance_id)
+        item_model = ItemModel.from_raw_data(raw_data, self.session_manager, self.manifest_cache, item_instance_id)
         if item_model.itemName == "Unknown":
             logging.error("Item hash %s not found in manifest.", item_hash)
             return None, 404
