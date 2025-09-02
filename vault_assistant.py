@@ -216,7 +216,7 @@ class VaultAssistant:
             logging.error("Failed to get profile details: status %d",
                           profile_detail_resp.status_code)
             return None, profile_detail_resp.status_code
-        profile_detail = profile_detail_resp.json()["Response"].get("profile", {}).get("data", {})
+        profile_detail = profile_detail_resp.json()["Response"]["[profile]"]["data"]
         bungie_last_modified = profile_detail.get("dateLastPlayed") or profile_detail.get("lastModified")
         if bungie_last_modified:
             try:
@@ -282,13 +282,12 @@ class VaultAssistant:
 
         # Get Bungie profile lastModified
         get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
-        profile_detail_resp = retry_request(
-            requests.get, get_profile_url, headers=headers, timeout=self.timeout)
+        profile_detail_resp = retry_request(requests.get, get_profile_url, headers=headers, timeout=self.timeout)
         if not profile_detail_resp.ok:
             logging.error("Failed to get profile details: status %d",
                           profile_detail_resp.status_code)
             return None, profile_detail_resp.status_code
-        profile_detail = profile_detail_resp.json()["Response"].get("profile", {}).get("data", {})
+        profile_detail = profile_detail_resp.json()["Response"]["profile"]["data"]
         bungie_last_modified = profile_detail.get("dateLastPlayed") or profile_detail.get("lastModified")
         if bungie_last_modified:
             try:
@@ -305,8 +304,7 @@ class VaultAssistant:
 
         # If blob exists and is newer than Bungie profile, use cached inventory
         if blob_exists_flag and bungie_last_modified_dt and blob_last_modified_dt and blob_last_modified_dt >= bungie_last_modified_dt:
-            logging.info(
-                "Using cached character inventories from blob for user: %s", membership_id)
+            logging.info("Using cached character inventories from blob for user: %s", membership_id)
             blob_data = load_blob(self.storage_conn_str, self.blob_container, blob_name)
             inventory_data = json.loads(blob_data)
             return inventory_data, 200
@@ -316,8 +314,7 @@ class VaultAssistant:
         char_resp = retry_request(
             requests.get, char_url, headers=headers, timeout=self.timeout)
         if not char_resp.ok:
-            logging.error(
-                "Failed to get character inventories: status %d", char_resp.status_code)
+            logging.error("Failed to get character inventories: status %d", char_resp.status_code)
             return None, char_resp.status_code
         resp_json = char_resp.json()["Response"]
         inventory_data = resp_json["characterInventories"]["data"]
