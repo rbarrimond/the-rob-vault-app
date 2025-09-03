@@ -183,8 +183,8 @@ class VaultAssistant:
         """
         session = self.get_session()
         access_token = session["access_token"]
-        membership_id = session["membershipId"]
-        membership_type = session["membershipType"]
+        membership_id = session["membership_id"]
+        membership_type = session["membership_type"]
         if not all([membership_id, membership_type]):
             logging.error("No Destiny memberships found for user.")
             return None, 404
@@ -201,7 +201,7 @@ class VaultAssistant:
             logging.error("Failed to get profile details: status %d",
                           profile_detail_resp.status_code)
             return None, profile_detail_resp.status_code
-        profile_detail = profile_detail_resp.json()["Response"]["[profile]"]["data"]
+        profile_detail = profile_detail_resp.json()["Response"]["profile"]["data"]
         bungie_last_modified = profile_detail.get("dateLastPlayed") or profile_detail.get("lastModified")
         if bungie_last_modified:
             try:
@@ -252,8 +252,8 @@ class VaultAssistant:
             "Authorization": f"Bearer {access_token}",
             "X-API-Key": self.api_key
         }
-        membership_id = session["membershipId"]
-        membership_type = session["membershipType"]
+        membership_id = session["membership_id"]
+        membership_type = session["membership_type"]
         if not all([membership_id, membership_type]):
             logging.error("No Destiny memberships found for user.")
             return None, 404

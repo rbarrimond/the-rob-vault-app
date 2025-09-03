@@ -86,13 +86,10 @@ class ItemModel(BaseModel):
         itemType = item_def.get("itemTypeDisplayName", "Unknown")
         itemTier = item_def.get("inventory", {}).get("tierTypeName", "Unknown")
         stats = {}
-        stats_def = item_def["stats"]["stats"]
+        stats_def = item_def.get("stats", {}).get("stats", {})
         for stat_hash, stat_obj in stats_def.items():
             stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash)
-            if stat_def and "displayProperties" in stat_def and "name" in stat_def["displayProperties"]:
-                stat_name = stat_def["displayProperties"]["name"]
-            else:
-                stat_name = stat_hash
+            stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
             stats[stat_name] = stat_obj.get("value")
         if item_instance_id:
             instance_info = cls._build_instance_info(item_instance_id, session_manager, manifest_cache)
@@ -128,29 +125,20 @@ class ItemModel(BaseModel):
         session = session_manager.get_session()
         access_token = session["access_token"]
         membership_id = session["membership_id"]
+        membership_type = session["membership_type"]
+        if not all([membership_id, membership_type]):
+            return None
         headers_auth = {
             "Authorization": f"Bearer {access_token}",
             "X-API-Key": session_manager.api_key
         }
-        # Try to get membership type
-        profile_url = f"{session_manager.api_base}/User/GetMembershipsForCurrentUser/"
-        profile_resp = retry_request(
-            requests.get, profile_url, headers=headers_auth, timeout=session_manager.timeout)
-        if not profile_resp.ok:
-            return None
-        profile_data = profile_resp.json()["Response"]
-        if not profile_data.get("destinyMemberships"):
-            return None
-        membership_type = profile_data["destinyMemberships"][0].get(
-            "membershipType", "1")
+
         # Fetch item instance data
         instance_url = f"{session_manager.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/Item/{item_instance_id}/?components=300,302,304"
-        instance_resp = retry_request(
-            requests.get, instance_url, headers=headers_auth, timeout=session_manager.timeout)
+        instance_resp = retry_request(requests.get, instance_url, headers=headers_auth, timeout=session_manager.timeout)
         if not instance_resp.ok:
             return None
         instance_data = instance_resp.json()["Response"]
-
         info = {}
         inst_stats = instance_data["stats"]["data"]["stats"]
         if inst_stats:
@@ -160,11 +148,10 @@ class ItemModel(BaseModel):
                 stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
                 stats_instance[stat_name] = stat_obj.get("value")
             info["instanceStats"] = stats_instance
-        inst_sockets = instance_data.get("sockets", {}).get("socketEntries", [])
         perks_instance = []
         masterwork_instance = None
         mods_instance = []
-        for socket in inst_sockets:
+        for socket in instance_data.get("sockets", {}).get("socketEntries", []):
             plug_hash = socket.get("singleInitialItemHash")
             if plug_hash:
                 plug_def, _ = manifest_cache.resolve_manifest_hash(plug_hash)
