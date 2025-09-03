@@ -37,9 +37,9 @@ from models import ItemModel
 
 class VaultAssistant:
     """
-    Business logic for Destiny 2 Vault Assistant operations.
+    Main business logic for Destiny 2 Vault Assistant operations.
 
-    Manages Destiny 2 API interactions, manifest lookups, backup operations, and delegates
+    This class manages Destiny 2 API interactions, manifest lookups, backup operations, and delegates
     session/authentication logic to BungieSessionManager. Integrates with Azure services for
     secure storage and scalable operations.
     """
@@ -684,4 +684,3 @@ class VaultAssistant:
             logging.error("Item hash %s not found in manifest.", item_hash)
             return None, 404
         return item_model.model_dump(), 200
-    
