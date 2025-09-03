@@ -1,7 +1,9 @@
 # pylint: disable=broad-exception-caught, line-too-long
 """
 ManifestCache module for Destiny 2 manifest management.
-Encapsulates manifest data loading, saving, and lookup logic.
+
+Encapsulates manifest data loading, saving, and lookup logic for Destiny 2 manifest SQLite database.
+Provides thread-safe singleton access, manifest download/update, and fast lookup methods for definitions.
 """
 import json
 import logging
@@ -21,16 +23,22 @@ from collections import defaultdict
 
 class ManifestCache:
     """
-    Singleton for Destiny 2 manifest SQLite DB in ephemeral storage.
+    Thread-safe singleton for Destiny 2 manifest SQLite DB in ephemeral storage.
+
     Use ManifestCache.instance() to get the shared instance.
     Call close() when shutting down to release resources and delete the DB file.
+    Provides methods for manifest download, update, and lookup.
     """
     _instance = None
 
     @classmethod
     def instance(cls, *args, **kwargs) -> "ManifestCache":
         """
-        Thread-safe shared instance getter for ManifestCache singleton.
+        Get the thread-safe shared instance of ManifestCache singleton.
+        Ensures manifest is loaded and prewarms small tables on first instantiation.
+
+        Returns:
+            ManifestCache: Shared singleton instance.
         """
         if not hasattr(cls, "_instance_lock"):
             cls._instance_lock = threading.RLock()
@@ -45,6 +53,9 @@ class ManifestCache:
         return cls._instance
 
     def __del__(self):
+        """
+        Destructor to ensure resources are released and manifest DB file is deleted.
+        """
         self.close()
 
 
@@ -55,6 +66,15 @@ class ManifestCache:
         timeout: int = REQUEST_TIMEOUT,
         storage_path: str = None
     ):
+        """
+        Initialize ManifestCache with API base, headers, timeout, and storage path.
+
+        Args:
+            api_base (str): Bungie API base URL.
+            headers (dict): HTTP headers for requests.
+            timeout (int): Request timeout in seconds.
+            storage_path (str): Path to store manifest SQLite DB.
+        """
         self.api_base = api_base
         self.headers = headers or DEFAULT_HEADERS
         self.timeout = timeout
@@ -70,6 +90,7 @@ class ManifestCache:
         """
         Ensure the Destiny 2 manifest SQLite database is present and up-to-date.
         Downloads and extracts the manifest if missing or outdated.
+
         Returns:
             bool: True if manifest is ready, False otherwise.
         """
@@ -124,6 +145,7 @@ class ManifestCache:
     def _connect(self) -> sqlite3.Connection:
         """
         Open a thread-safe SQLite connection to the manifest database (private).
+
         Returns:
             sqlite3.Connection: SQLite connection object.
         Raises:
@@ -150,7 +172,7 @@ class ManifestCache:
     def prewarm_small_tables(self) -> None:
         """
         Preload small, frequently used definition tables into memory.
-        This avoids per-hash SQLite lookups for common names/types.
+        Avoids per-hash SQLite lookups for common names/types.
         Safe because these tables are tiny (O(10-1000) rows).
         """
         small_types = [
@@ -173,6 +195,13 @@ class ManifestCache:
         """
         Batch resolve a list of hashes for a single definition type.
         Returns dict keyed by unsigned string hash -> json dict.
+
+        Args:
+            definition_type (str): Manifest table name.
+            item_hashes (list[int | str]): List of item hashes to resolve.
+
+        Returns:
+            dict: Mapping of hash to definition dict.
         """
         if not item_hashes:
             return {}
@@ -217,6 +246,13 @@ class ManifestCache:
         """
         Fast path: resolve a single hash against a specific definition.
         Uses per-type memoization to avoid repeated DB hits.
+
+        Args:
+            item_hash (int | str): Item hash to resolve.
+            definition_type (str): Manifest table name.
+
+        Returns:
+            dict or None: Definition dict if found, else None.
         """
         try:
             norm = int(normalize_item_hash(item_hash))
@@ -248,6 +284,13 @@ class ManifestCache:
     def resolve_many(self, hashes: list[int | str], definition_type: str) -> dict[str, dict]:
         """
         Fast path: resolve many hashes for one definition type with memo + batch SQL.
+
+        Args:
+            hashes (list[int | str]): List of item hashes to resolve.
+            definition_type (str): Manifest table name.
+
+        Returns:
+            dict: Mapping of hash to definition dict.
         """
         # Partition into (cached) and (misses)
         norm_hashes = []
@@ -277,6 +320,12 @@ class ManifestCache:
         """
         Fast full-table read for *small* definition tables.
         Returns a mapping of unsigned string hash -> definition json.
+
+        Args:
+            definition_type (str): Manifest table name.
+
+        Returns:
+            dict: Mapping of hash to definition dict.
         """
         defs = {}
         with self._lock:
@@ -299,9 +348,11 @@ class ManifestCache:
         Retrieve manifest definitions for a given type/table.
         If item_hash is provided, returns a single definition dict or None.
         If item_hash is None, returns all definitions as a dict.
+
         Args:
             definition_type (str): Manifest table name (e.g., DestinyInventoryItemDefinition).
             item_hash (str|int, optional): Destiny item hash to look up.
+
         Returns:
             dict: Mapping of item hash (str) to manifest definition dict, or single definition dict if item_hash is provided.
         """
