@@ -71,7 +71,7 @@ class VaultAssistant:
         self.api_base = api_base
         self.timeout = timeout
         self.manifest_cache = ManifestCache()
-        self.session_manager = BungieSessionManager()
+        self.session_manager = BungieSessionManager.instance()
         self.db_agent = None  # Ensure db_agent attribute always exists
 
     # Session/auth methods are now delegated to BungieSessionManager
