@@ -13,19 +13,9 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from pydantic import BaseModel
-from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    Column,
-    DateTime,
-    ForeignKey,
-    ForeignKeyConstraint,
-    Index,
-    Integer,
-    String,
-    text,
-    desc,
-)
+from sqlalchemy import (BigInteger, Boolean, Column, DateTime, ForeignKey,
+                        ForeignKeyConstraint, Index, Integer, String, desc,
+                        text)
 from sqlalchemy.orm import declarative_base, relationship
 
 from bungie_session_manager import BungieSessionManager
@@ -71,15 +61,13 @@ class ItemModel(BaseModel):
     def from_components(
         cls,
         raw_item: dict,
-        manifest_cache: ManifestCache,
         components: Optional[dict] = None,
-        session_manager: Optional[BungieSessionManager] = None,
     ) -> "ItemModel":
         """
         Build an ItemModel from an item's raw definition snippet and optional pre-fetched instance components (300/302/304/305).
-        If components are not provided, falls back to fetching via _build_instance_info (requires session_manager).
+        Uses ManifestCache and BungieSessionManager singletons internally; does not require them as parameters.
         """
-        manifest_cache.ensure_manifest()
+        manifest_cache = ManifestCache.instance()
         item_hash = raw_item.get("itemHash")
         item_def, _ = manifest_cache.resolve_manifest_hash(item_hash, ["DestinyInventoryItemDefinition"])  # type: ignore
         item_name = (item_def or {}).get("displayProperties", {}).get("name", "Unknown")
@@ -150,8 +138,9 @@ class ItemModel(BaseModel):
             if sockets_out:
                 perks["sockets"] = sockets_out
 
-        # If no components provided, optionally fetch instance info if we have session
-        if not components and session_manager and raw_item.get("itemInstanceId"):
+        # If no components provided, fetch instance info using singleton managers
+        if not components and raw_item.get("itemInstanceId"):
+            session_manager = BungieSessionManager.instance()
             inst_info = cls._build_instance_info(raw_item.get("itemInstanceId"), session_manager, manifest_cache)
             stats.update(inst_info.get("instanceStats", {}))
             if "energy" in inst_info:
@@ -181,26 +170,25 @@ class ItemModel(BaseModel):
         plug_defs: Dict[str, Dict[str, Any]],
         sandbox_defs: Dict[str, Dict[str, Any]],
         item_components: Optional[dict] = None,
-        manifest_cache: Optional[ManifestCache] = None,
     ) -> "ItemModel":
         """
         Build ItemModel using pre-resolved definition maps (batched).
+        Uses ManifestCache singleton internally; does not require it as a parameter.
         Args:
             plug_defs (Dict[str, Dict[str, Any]]): Pre-resolved plug definitions.
             sandbox_defs (Dict[str, Dict[str, Any]]): Pre-resolved sandbox perk definitions.
             item_components (Optional[dict]): Item instance components.
-            manifest_cache (Optional[ManifestCache]): Manifest cache for lookups.
         """
+        manifest_cache = ManifestCache.instance()
         item_hash = raw_item.get("itemHash")
         item_name = "Unknown"
         item_type = "Unknown"
         item_tier = None
-        if manifest_cache:
-            item_def, _ = manifest_cache.resolve_manifest_hash(item_hash, ["DestinyInventoryItemDefinition"])  # type: ignore
-            if item_def:
-                item_name = item_def.get("displayProperties", {}).get("name", item_name)
-                item_type = item_def.get("itemTypeDisplayName", item_type)
-                item_tier = item_def.get("inventory", {}).get("tierTypeName", None)
+        item_def, _ = manifest_cache.resolve_manifest_hash(item_hash, ["DestinyInventoryItemDefinition"])  # type: ignore
+        if item_def:
+            item_name = item_def.get("displayProperties", {}).get("name", item_name)
+            item_type = item_def.get("itemTypeDisplayName", item_type)
+            item_tier = item_def.get("inventory", {}).get("tierTypeName", None)
 
         stats: Dict[str, int] = dict()
         perks: Dict[str, List[Dict[str, Any]]] = dict()
@@ -209,14 +197,13 @@ class ItemModel(BaseModel):
             # 304 stats
             for stat_hash, stat_obj in ((item_components.get("stats") or {}).get("data", {}).get("stats", {}) .items()):
                 name = str(stat_hash)
-                if manifest_cache:
-                    stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash, ["DestinyStatDefinition"])  # type: ignore
-                    name = (stat_def or {}).get("displayProperties", {}).get("name") or name
+                stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash, ["DestinyStatDefinition"])  # type: ignore
+                name = (stat_def or {}).get("displayProperties", {}).get("name") or name
                 stats[name] = stat_obj.get("value")
             # 300 energy
             inst = (item_components.get("instance") or {}).get("data", {})
             energy = inst.get("energy")
-            if energy and manifest_cache:
+            if energy:
                 et_hash = energy.get("energyTypeHash")
                 et_def, _ = manifest_cache.resolve_manifest_hash(et_hash, ["DestinyEnergyTypeDefinition"]) if et_hash is not None else (None, None)
                 perks["energy"] = {
@@ -272,79 +259,6 @@ class ItemModel(BaseModel):
             location=raw_item.get("location"),
             isEquipped=raw_item.get("isEquipped", False),
             owner=raw_item.get("owner"),
-        )
-
-    @classmethod
-    def from_raw_data(
-        cls,
-        raw_data: dict,
-        session_manager: BungieSessionManager,
-        manifest_cache: ManifestCache,
-        item_instance_id: str = None
-    ) -> "ItemModel":
-        """
-        DEPRECATED: Prefer `ItemModel.from_components(...)` or `ItemModel.from_components_batched(...)` for new code.
-
-        Build a fully decoded ItemModel from raw item data and manifest cache.
-
-        Args:
-            raw_data (dict): Raw item data from blob or database.
-            session_manager (BungieSessionManager): Bungie session manager for API calls.
-            manifest_cache (ManifestCache): ManifestCache instance for lookups.
-            item_instance_id (str, optional): Destiny 2 item instance ID.
-
-        Returns:
-            ItemModel: Fully populated item model with manifest enrichment.
-        """
-        manifest_cache.ensure_manifest()
-        norm_hash = raw_data.get("itemHash")
-        item_def, _ = manifest_cache.resolve_manifest_hash(norm_hash, ["DestinyInventoryItemDefinition"])
-        if not item_def:
-            return cls(
-                itemHash=norm_hash,
-                itemInstanceId=raw_data.get("itemInstanceId"),
-                itemName="Unknown",
-                itemType="Unknown",
-                itemTier=None,
-                stats=dict(),
-                perks=dict(),
-                location=raw_data.get("location"),
-                isEquipped=raw_data.get("isEquipped", False),
-                owner=raw_data.get("owner")
-            )
-        item_name = item_def.get("displayProperties", {}).get("name", "Unknown")
-        item_type = item_def.get("itemTypeDisplayName", "Unknown")
-        item_tier = item_def.get("inventory", {}).get("tierTypeName", "Unknown")
-        item_stats = {}
-        item_perks = {}
-        stats_def = item_def.get("stats", {}).get("stats", {})
-        for stat_hash, stat_obj in stats_def.items():
-            stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash, ["DestinyStatDefinition"])
-            stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
-            item_stats[stat_name] = stat_obj.get("value")
-        if item_instance_id:
-            instance_info = cls._build_instance_info(item_instance_id, session_manager, manifest_cache)
-            item_stats.update(instance_info.get("instanceStats", {}))
-            instance_info.pop("instanceStats", None)  # Remove stats to avoid duplication
-            item_perks.update(instance_info.get("instancePerks", {}))
-            # Add energy, sockets, sandboxPerks from instance_info
-            if "energy" in instance_info:
-                item_perks["energy"] = instance_info["energy"]
-            if "instanceSockets" in instance_info:
-                item_perks["sockets"] = instance_info["instanceSockets"]
-            if "sandboxPerks" in instance_info:
-                item_perks["sandboxPerks"] = instance_info["sandboxPerks"]
-        return cls(
-            itemHash=norm_hash,
-            itemInstanceId=item_instance_id or raw_data.get("itemInstanceId"),
-            itemName=item_name,
-            itemType=item_type,
-            itemTier=item_tier,
-            stats=item_stats,
-            perks=item_perks,
-            location=raw_data.get("location"),
-            isEquipped=raw_data.get("isEquipped", False),
-            owner=raw_data.get("owner")
         )
 
     @staticmethod
@@ -475,10 +389,10 @@ class CharacterModel(BaseModel):
         character_blob: dict,
         items_raw: List[dict],
         components_by_instance: Dict[str, dict],
-        manifest_cache: ManifestCache,
     ) -> "CharacterModel":
         """
         Build a CharacterModel from a character blob, raw items, and a mapping of instanceId->components (300/302/304/305).
+        Uses ManifestCache singleton internally; does not require it as a parameter.
         """
         char_id = str(character_blob.get("characterId"))
         name = character_blob.get("displayName") or char_id
@@ -488,7 +402,7 @@ class CharacterModel(BaseModel):
         for it in items_raw:
             iid = it.get("itemInstanceId")
             comps = components_by_instance.get(str(iid)) if iid else None
-            items.append(ItemModel.from_components(it, manifest_cache, components=comps))
+            items.append(ItemModel.from_components(it, components=comps))
         return cls(charId=char_id, name=name, classType=class_type, items=items)
 
 class VaultModel(BaseModel):
@@ -507,16 +421,16 @@ class VaultModel(BaseModel):
         cls,
         items_raw: List[dict],
         components_by_instance: Dict[str, dict],
-        manifest_cache: ManifestCache,
     ) -> "VaultModel":
         """
         Build a VaultModel from raw items and a mapping of instanceId->components (300/302/304/305).
+        Uses ManifestCache singleton internally; does not require it as a parameter.
         """
         items: List[ItemModel] = []
         for it in items_raw:
             iid = it.get("itemInstanceId")
             comps = components_by_instance.get(str(iid)) if iid else None
-            items.append(ItemModel.from_components(it, manifest_cache, components=comps))
+            items.append(ItemModel.from_components(it, components=comps))
         return cls(items=items)
 
 # --- SQLAlchemy ORM Models ---
