@@ -11,14 +11,27 @@ Includes:
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
 import requests
-from sqlalchemy import (BigInteger, Boolean, Column, DateTime, ForeignKey, ForeignKeyConstraint, Integer, String, Index, UniqueConstraint)
+from pydantic import BaseModel
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    text,
+    desc,
+)
 from sqlalchemy.orm import declarative_base, relationship
 
 from bungie_session_manager import BungieSessionManager
 from helpers import retry_request
 from manifest_cache import ManifestCache
+
 
 # --- Pydantic Models ---
 class ItemModel(BaseModel):
@@ -26,13 +39,17 @@ class ItemModel(BaseModel):
     Pydantic model for a Destiny 2 item.
 
     Attributes:
-        itemHash (str): Destiny 2 item hash (unique identifier).
+        itemHash (int): Destiny 2 item hash (unique identifier).
         itemInstanceId (Optional[str]): Instance ID for the item (if applicable).
         itemName (str): Display name of the item.
         itemType (str): Type of item (e.g., weapon, armor).
         itemTier (Optional[str]): Tier of item (e.g., Legendary, Exotic).
         stats (Dict[str, int]): Stat values for the item.
-        location (Optional[str]): Where the item is stored (vault, character).
+        perks (Dict[str, List[Dict[str, Any]]]): Perks and socket/plugs for the item.
+        energy (Optional[Dict[str, Any]]): Energy details for armor items.
+        sockets (Optional[List[Dict[str, Any]]]): Socket details for the item.
+        sandboxPerks (Optional[List[Dict[str, Any]]]): Artifact/passive perks.
+        location (Optional[int]): Where the item is stored (vault, character).
         isEquipped (bool): Whether the item is currently equipped.
         owner (Optional[str]): Owner of the item (character ID or vault).
     """
@@ -51,6 +68,213 @@ class ItemModel(BaseModel):
     owner: Optional[str]
 
     @classmethod
+    def from_components(
+        cls,
+        raw_item: dict,
+        manifest_cache: ManifestCache,
+        components: Optional[dict] = None,
+        session_manager: Optional[BungieSessionManager] = None,
+    ) -> "ItemModel":
+        """
+        Build an ItemModel from an item's raw definition snippet and optional pre-fetched instance components (300/302/304/305).
+        If components are not provided, falls back to fetching via _build_instance_info (requires session_manager).
+        """
+        manifest_cache.ensure_manifest()
+        item_hash = raw_item.get("itemHash")
+        item_def, _ = manifest_cache.resolve_manifest_hash(item_hash, ["DestinyInventoryItemDefinition"])  # type: ignore
+        item_name = (item_def or {}).get("displayProperties", {}).get("name", "Unknown")
+        item_type = (item_def or {}).get("itemTypeDisplayName", "Unknown")
+        item_tier = (item_def or {}).get("inventory", {}).get("tierTypeName", "Unknown")
+
+        stats: Dict[str, int] = dict()
+        perks: Dict[str, List[Dict[str, Any]]] = dict()
+
+        # Pull static stats from definition, if any
+        for stat_hash, stat_obj in ((item_def or {}).get("stats", {}).get("stats", {}) .items()):
+            stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash, ["DestinyStatDefinition"])  # type: ignore
+            stat_name = (stat_def or {}).get("displayProperties", {}).get("name") or str(stat_hash)
+            stats[stat_name] = stat_obj.get("value")
+
+        # Merge instance components if supplied
+        if components:
+            # 300 energy
+            inst = (components.get("instance") or {}).get("data", {})
+            energy = inst.get("energy")
+            if energy:
+                et_hash = energy.get("energyTypeHash")
+                et_def, _ = manifest_cache.resolve_manifest_hash(et_hash, ["DestinyEnergyTypeDefinition"]) if et_hash is not None else (None, None)
+                perks["energy"] = {
+                    "type_hash": et_hash,
+                    "type_name": (et_def or {}).get("displayProperties", {}).get("name"),
+                    "capacity": energy.get("energyCapacity"),
+                    "used": energy.get("energyUsed"),
+                    "unused": energy.get("energyUnused"),
+                }
+            # 304 stats
+            for stat_hash, stat_obj in ((components.get("stats") or {}).get("data", {}).get("stats", {}) .items()):
+                stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash, ["DestinyStatDefinition"])  # type: ignore
+                stat_name = (stat_def or {}).get("displayProperties", {}).get("name") or str(stat_hash)
+                stats[stat_name] = stat_obj.get("value")
+            # 302 sandbox perks
+            sp_list: List[Dict[str, Any]] = []
+            for p in ((components.get("perks") or {}).get("data", {}).get("perks", []) or []):
+                s_hash = p.get("perkHash")
+                if not s_hash:
+                    continue
+                s_def, _ = manifest_cache.resolve_manifest_hash(s_hash, ["DestinySandboxPerkDefinition"])  # type: ignore
+                dp = (s_def or {}).get("displayProperties", {})
+                sp_list.append({
+                    "hash": s_hash,
+                    "name": dp.get("name", str(s_hash)),
+                    "icon": dp.get("icon"),
+                    "active": p.get("isActive", False),
+                    "visible": p.get("visible", False),
+                })
+            if sp_list:
+                perks["sandboxPerks"] = sp_list
+            # 305 sockets (equipped plugs only)
+            sockets_out: List[Dict[str, Any]] = []
+            for idx, s in enumerate(((components.get("sockets") or {}).get("data", {}).get("sockets", []) or [])):
+                plug_hash = s.get("plugHash")
+                plug = None
+                if plug_hash is not None:
+                    p_def, _ = manifest_cache.resolve_manifest_hash(plug_hash, ["DestinyInventoryItemDefinition"])  # type: ignore
+                    dp = (p_def or {}).get("displayProperties", {})
+                    plug = {"hash": plug_hash, "name": dp.get("name", str(plug_hash)), "icon": dp.get("icon")}
+                sockets_out.append({
+                    "socketIndex": idx,
+                    "isEnabled": s.get("isEnabled", False),
+                    "isVisible": s.get("isVisible", False),
+                    "equipped": plug,
+                })
+            if sockets_out:
+                perks["sockets"] = sockets_out
+
+        # If no components provided, optionally fetch instance info if we have session
+        if not components and session_manager and raw_item.get("itemInstanceId"):
+            inst_info = cls._build_instance_info(raw_item.get("itemInstanceId"), session_manager, manifest_cache)
+            stats.update(inst_info.get("instanceStats", {}))
+            if "energy" in inst_info:
+                perks["energy"] = inst_info["energy"]
+            if "instanceSockets" in inst_info:
+                perks["sockets"] = inst_info["instanceSockets"]
+            if "sandboxPerks" in inst_info:
+                perks["sandboxPerks"] = inst_info["sandboxPerks"]
+
+        return cls(
+            itemHash=item_hash,
+            itemInstanceId=raw_item.get("itemInstanceId"),
+            itemName=item_name,
+            itemType=item_type,
+            itemTier=item_tier,
+            stats=stats,
+            perks=perks,
+            location=raw_item.get("location"),
+            isEquipped=raw_item.get("isEquipped", False),
+            owner=raw_item.get("owner"),
+        )
+
+    @classmethod
+    def from_components_batched(
+        cls,
+        raw_item: dict,
+        plug_defs: Dict[str, Dict[str, Any]],
+        sandbox_defs: Dict[str, Dict[str, Any]],
+        item_components: Optional[dict] = None,
+        manifest_cache: Optional[ManifestCache] = None,
+    ) -> "ItemModel":
+        """
+        Build ItemModel using pre-resolved definition maps (batched).
+        Args:
+            plug_defs (Dict[str, Dict[str, Any]]): Pre-resolved plug definitions.
+            sandbox_defs (Dict[str, Dict[str, Any]]): Pre-resolved sandbox perk definitions.
+            item_components (Optional[dict]): Item instance components.
+            manifest_cache (Optional[ManifestCache]): Manifest cache for lookups.
+        """
+        item_hash = raw_item.get("itemHash")
+        item_name = "Unknown"
+        item_type = "Unknown"
+        item_tier = None
+        if manifest_cache:
+            item_def, _ = manifest_cache.resolve_manifest_hash(item_hash, ["DestinyInventoryItemDefinition"])  # type: ignore
+            if item_def:
+                item_name = item_def.get("displayProperties", {}).get("name", item_name)
+                item_type = item_def.get("itemTypeDisplayName", item_type)
+                item_tier = item_def.get("inventory", {}).get("tierTypeName", None)
+
+        stats: Dict[str, int] = dict()
+        perks: Dict[str, List[Dict[str, Any]]] = dict()
+
+        if item_components:
+            # 304 stats
+            for stat_hash, stat_obj in ((item_components.get("stats") or {}).get("data", {}).get("stats", {}) .items()):
+                name = str(stat_hash)
+                if manifest_cache:
+                    stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash, ["DestinyStatDefinition"])  # type: ignore
+                    name = (stat_def or {}).get("displayProperties", {}).get("name") or name
+                stats[name] = stat_obj.get("value")
+            # 300 energy
+            inst = (item_components.get("instance") or {}).get("data", {})
+            energy = inst.get("energy")
+            if energy and manifest_cache:
+                et_hash = energy.get("energyTypeHash")
+                et_def, _ = manifest_cache.resolve_manifest_hash(et_hash, ["DestinyEnergyTypeDefinition"]) if et_hash is not None else (None, None)
+                perks["energy"] = {
+                    "type_hash": et_hash,
+                    "type_name": (et_def or {}).get("displayProperties", {}).get("name"),
+                    "capacity": energy.get("energyCapacity"),
+                    "used": energy.get("energyUsed"),
+                    "unused": energy.get("energyUnused"),
+                }
+            # 302 sandbox perks
+            sps: List[Dict[str, Any]] = []
+            for p in ((item_components.get("perks") or {}).get("data", {}).get("perks", []) or []):
+                h = p.get("perkHash")
+                if h is None:
+                    continue
+                d = sandbox_defs.get(str(int(h) & 0xFFFFFFFF), {})
+                dp = (d or {}).get("displayProperties", {})
+                sps.append({
+                    "hash": h,
+                    "name": dp.get("name", str(h)),
+                    "icon": dp.get("icon"),
+                    "active": p.get("isActive", False),
+                    "visible": p.get("visible", False),
+                })
+            if sps:
+                perks["sandboxPerks"] = sps
+            # 305 sockets
+            sock_out: List[Dict[str, Any]] = []
+            for idx, s in enumerate(((item_components.get("sockets") or {}).get("data", {}).get("sockets", []) or [])):
+                h = s.get("plugHash")
+                plug = None
+                if h is not None:
+                    d = plug_defs.get(str(int(h) & 0xFFFFFFFF), {})
+                    dp = (d or {}).get("displayProperties", {})
+                    plug = {"hash": h, "name": dp.get("name", str(h)), "icon": dp.get("icon")}
+                sock_out.append({
+                    "socketIndex": idx,
+                    "isEnabled": s.get("isEnabled", False),
+                    "isVisible": s.get("isVisible", False),
+                    "equipped": plug,
+                })
+            if sock_out:
+                perks["sockets"] = sock_out
+
+        return cls(
+            itemHash=item_hash,
+            itemInstanceId=raw_item.get("itemInstanceId"),
+            itemName=item_name,
+            itemType=item_type,
+            itemTier=item_tier,
+            stats=stats,
+            perks=perks,
+            location=raw_item.get("location"),
+            isEquipped=raw_item.get("isEquipped", False),
+            owner=raw_item.get("owner"),
+        )
+
+    @classmethod
     def from_raw_data(
         cls,
         raw_data: dict,
@@ -59,10 +283,13 @@ class ItemModel(BaseModel):
         item_instance_id: str = None
     ) -> "ItemModel":
         """
+        DEPRECATED: Prefer `ItemModel.from_components(...)` or `ItemModel.from_components_batched(...)` for new code.
+
         Build a fully decoded ItemModel from raw item data and manifest cache.
 
         Args:
             raw_data (dict): Raw item data from blob or database.
+            session_manager (BungieSessionManager): Bungie session manager for API calls.
             manifest_cache (ManifestCache): ManifestCache instance for lookups.
             item_instance_id (str, optional): Destiny 2 item instance ID.
 
@@ -131,6 +358,7 @@ class ItemModel(BaseModel):
 
         Args:
             item_instance_id (str): Destiny 2 item instance ID.
+            session_manager (BungieSessionManager): Bungie session manager for API calls.
             manifest_cache (ManifestCache): ManifestCache instance for lookups.
 
         Returns:
@@ -241,6 +469,28 @@ class CharacterModel(BaseModel):
     items: List[ItemModel] = list()
     data_version: Optional[datetime] = None
 
+    @classmethod
+    def from_components(
+        cls,
+        character_blob: dict,
+        items_raw: List[dict],
+        components_by_instance: Dict[str, dict],
+        manifest_cache: ManifestCache,
+    ) -> "CharacterModel":
+        """
+        Build a CharacterModel from a character blob, raw items, and a mapping of instanceId->components (300/302/304/305).
+        """
+        char_id = str(character_blob.get("characterId"))
+        name = character_blob.get("displayName") or char_id
+        class_type = character_blob.get("classTypeLabel") or str(character_blob.get("classType"))
+
+        items: List[ItemModel] = []
+        for it in items_raw:
+            iid = it.get("itemInstanceId")
+            comps = components_by_instance.get(str(iid)) if iid else None
+            items.append(ItemModel.from_components(it, manifest_cache, components=comps))
+        return cls(charId=char_id, name=name, classType=class_type, items=items)
+
 class VaultModel(BaseModel):
     """
     Pydantic model for the shared Destiny 2 vault.
@@ -252,25 +502,42 @@ class VaultModel(BaseModel):
     items: List[ItemModel] = list()
     data_version: Optional[datetime] = None
 
+    @classmethod
+    def from_components(
+        cls,
+        items_raw: List[dict],
+        components_by_instance: Dict[str, dict],
+        manifest_cache: ManifestCache,
+    ) -> "VaultModel":
+        """
+        Build a VaultModel from raw items and a mapping of instanceId->components (300/302/304/305).
+        """
+        items: List[ItemModel] = []
+        for it in items_raw:
+            iid = it.get("itemInstanceId")
+            comps = components_by_instance.get(str(iid)) if iid else None
+            items.append(ItemModel.from_components(it, manifest_cache, components=comps))
+        return cls(items=items)
+
 # --- SQLAlchemy ORM Models ---
 
 Base = declarative_base()
 
 class User(Base):
     """
-    Represents a Destiny 2 user/account.
+    SQLAlchemy ORM model representing a Destiny 2 user/account.
     """
     __tablename__ = 'Users'
     user_id = Column(BigInteger, primary_key=True)
     membership_id = Column(String(50), nullable=False)
     membership_type = Column(String(20), nullable=False)
     display_name = Column(String(100))
-    created_at = Column(DateTime)
+    created_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
     characters = relationship("Character", back_populates="user")
 
 class Character(Base):
     """
-    Represents a Destiny 2 character belonging to a user.
+    SQLAlchemy ORM model representing a Destiny 2 character belonging to a user.
     """
     __tablename__ = 'Characters'
     character_id = Column(BigInteger, primary_key=True)
@@ -278,12 +545,14 @@ class Character(Base):
     class_type = Column(String(50))
     light = Column(Integer)
     race_hash = Column(BigInteger)
+    created_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
     user = relationship("User", back_populates="characters")
     items = relationship("Item", back_populates="character")
+    __table_args__ = (Index('IX_Characters_UserId', 'user_id'),)
 
 class Item(Base):
     """
-    Represents an inventory item for a character.
+    SQLAlchemy ORM model representing an inventory item for a character.
     """
     __tablename__ = 'Items'
     item_id = Column(BigInteger, primary_key=True)
@@ -293,92 +562,132 @@ class Item(Base):
     name = Column(String(100))
     type = Column(String(50))
     tier = Column(String(50))
+    power_value = Column(Integer)
+    is_equipped = Column(Boolean, nullable=False, server_default=text("0"))
+    content_hash = Column(String(64))
     collectible_hash = Column(BigInteger)
     power_cap_hash = Column(BigInteger)
     season_hash = Column(BigInteger)
+    updated_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
+    created_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
     character = relationship("Character", back_populates="items")
     stats = relationship("ItemStat", back_populates="item")
-    perks = relationship("ItemPerk", back_populates="item")
-    mods = relationship("ItemMod", back_populates="item")
-    masterwork = relationship("ItemMasterwork", uselist=False, back_populates="item")
     sockets = relationship("ItemSocket", back_populates="item")
+    __table_args__ = (
+        Index('IX_Items_Character_Equipped', 'character_id', 'is_equipped'),
+        Index('IX_Items_ItemHash', 'item_hash'),
+        Index('IX_Items_InstanceId', 'item_instance_id'),
+    )
 
 class ItemStat(Base):
     """
-    Represents a stat value for an item (e.g., Discipline, Mobility).
+    SQLAlchemy ORM model representing a stat value for an item (e.g., Discipline, Mobility).
     """
     __tablename__ = 'ItemStats'
     item_id = Column(BigInteger, ForeignKey('Items.item_id'), primary_key=True)
     stat_hash = Column(BigInteger, primary_key=True)
     stat_name = Column(String(100))
-    stat_value = Column(Integer)
+    stat_value = Column(Integer, nullable=False)
     item = relationship("Item", back_populates="stats")
+    __table_args__ = (
+        Index('IX_ItemStats_StatHash_Value', 'stat_hash', desc('stat_value')),
+        Index('IX_ItemStats_ItemId', 'item_id'),
+    )
 
-class ItemPerk(Base):
-    """
-    Represents a perk available on an item.
-    """
-    __tablename__ = 'ItemPerks'
-    item_id = Column(BigInteger, ForeignKey('Items.item_id'), primary_key=True)
-    perk_hash = Column(BigInteger, primary_key=True)
-    perk_name = Column(String(100))
-    description = Column(String(255))
-    icon = Column(String(255))
-    item = relationship("Item", back_populates="perks")
-
-class ItemMod(Base):
-    """
-    Represents a mod available on an item.
-    """
-    __tablename__ = 'ItemMods'
-    item_id = Column(BigInteger, ForeignKey('Items.item_id'), primary_key=True)
-    mod_hash = Column(BigInteger, primary_key=True)
-    mod_name = Column(String(100))
-    description = Column(String(255))
-    icon = Column(String(255))
-    item = relationship("Item", back_populates="mods")
-
-class ItemMasterwork(Base):
-    """
-    Represents masterwork details for an item.
-    """
-    __tablename__ = 'ItemMasterwork'
-    item_id = Column(BigInteger, ForeignKey('Items.item_id'), primary_key=True)
-    masterwork_hash = Column(BigInteger)
-    masterwork_name = Column(String(100))
-    description = Column(String(255))
-    icon = Column(String(255))
-    item = relationship("Item", back_populates="masterwork")
 
 class ItemSocket(Base):
     """
-    Represents a socket on an item for customization.
+    SQLAlchemy ORM model representing a socket on an item for customization.
     """
     __tablename__ = 'ItemSockets'
     item_id = Column(BigInteger, ForeignKey('Items.item_id'), primary_key=True)
     socket_index = Column(Integer, primary_key=True)
     socket_type_hash = Column(BigInteger)
+    category_name = Column(String(100))
+    is_visible = Column(Boolean, nullable=False, server_default=text("1"))
+    is_enabled = Column(Boolean, nullable=False, server_default=text("1"))
     item = relationship("Item", back_populates="sockets")
     plugs = relationship("ItemPlug", back_populates="socket")
+    __table_args__ = (
+        Index('IX_ItemSockets_ItemId', 'item_id'),
+    )
 
 class ItemPlug(Base):
     """
-    Represents a plug (perk/mod) in a socket, tracks equipped state.
+    SQLAlchemy ORM model representing a plug (perk/mod) in a socket, tracks equipped state.
     Composite FK to ItemSockets (item_id, socket_index).
     """
     __tablename__ = 'ItemPlugs'
     item_id = Column(BigInteger, primary_key=True)
     socket_index = Column(Integer, primary_key=True)
     plug_hash = Column(BigInteger, primary_key=True)
-    is_equipped = Column(Boolean, default=False)
-
+    plug_name = Column(String(100))
+    plug_icon = Column(String(255))
+    is_equipped = Column(Boolean, nullable=False, server_default=text("0"))
     __table_args__ = (
         ForeignKeyConstraint(
             ["item_id", "socket_index"],
             ["ItemSockets.item_id", "ItemSockets.socket_index"],
             name="fk_itemplugs_itemsockets"
         ),
-        Index('idx_itemplugs_plug_hash', 'plug_hash'),
+        Index('IX_ItemPlugs_ItemId', 'item_id'),
+        Index('IX_ItemPlugs_SocketIndex', 'socket_index'),
+        Index('IX_ItemPlugs_PlugHash', 'plug_hash'),
+    )
+    socket = relationship("ItemSocket", back_populates="plugs")
+
+# --- Additional ORM classes for missing schema tables ---
+
+class ItemSocketChoice(Base):
+    """
+    SQLAlchemy ORM model representing a choice of plug for a socket instance.
+    """
+    __tablename__ = 'ItemSocketChoices'
+    instance_id = Column(BigInteger, primary_key=True)
+    socket_index = Column(Integer, primary_key=True)
+    plug_hash = Column(BigInteger, primary_key=True)
+    plug_name = Column(String(100))
+    __table_args__ = (
+        Index('IX_ItemSocketChoices_Plug', 'plug_hash'),
+        Index('IX_ItemSocketChoices_Inst', 'instance_id'),
     )
 
-    socket = relationship("ItemSocket", back_populates="plugs")
+class ItemSandboxPerk(Base):
+    """
+    SQLAlchemy ORM model representing a sandbox perk for an item instance.
+    """
+    __tablename__ = 'ItemSandboxPerks'
+    instance_id = Column(BigInteger, primary_key=True)
+    sandbox_perk_hash = Column(BigInteger, primary_key=True)
+    name = Column(String(100))
+    icon = Column(String(255))
+    is_active = Column(Boolean, nullable=False, server_default=text('0'))
+    is_visible = Column(Boolean, nullable=False, server_default=text('0'))
+    __table_args__ = (
+        Index('IX_ItemSandboxPerks_Hash', 'sandbox_perk_hash'),
+        Index('IX_ItemSandboxPerks_Inst', 'instance_id'),
+    )
+
+class ItemEnergy(Base):
+    """
+    SQLAlchemy ORM model representing energy details for an item instance.
+    """
+    __tablename__ = 'ItemEnergy'
+    instance_id = Column(BigInteger, primary_key=True)
+    energy_type_hash = Column(BigInteger)
+    energy_type_name = Column(String(50))
+    capacity = Column(Integer)
+    used = Column(Integer)
+    unused = Column(Integer)
+
+class ItemSocketLayout(Base):
+    """
+    SQLAlchemy ORM model representing the layout of sockets for an item hash.
+    """
+    __tablename__ = 'ItemSocketLayout'
+    item_hash = Column(BigInteger, primary_key=True)
+    socket_index = Column(Integer, primary_key=True)
+    category_name = Column(String(100))
+    __table_args__ = (
+        Index('IX_ItemSocketLayout_ItemHash', 'item_hash'),
+    )
