@@ -16,29 +16,33 @@ REQUEST_TIMEOUT = 10  # seconds
 
 # Bungie manifest definition keys required for decoding and optimizing character loadouts
 BUNGIE_REQUIRED_DEFS = [
-    # --- Item and Inventory ---
-    "DestinyInventoryItemDefinition",      # weapons, armor, ghosts, artifacts, mods, etc.
+    # --- Item and Inventory (core lookups for plugs, items, and slots) ---
+    "DestinyInventoryItemDefinition",      # weapons, armor, ghosts, artifacts, mods, shaders, ornaments, masterworks
     "DestinyInventoryBucketDefinition",    # vault, character slots, etc.
-    "DestinyItemCategoryDefinition",       # weapon, armor, ghost, etc.
+    "DestinyItemCategoryDefinition",       # weapon/armor/ghost categories
     "DestinyItemTierTypeDefinition",       # Exotic, Legendary, etc.
 
-    # --- Stats and Sockets ---
-    "DestinyStatDefinition",               # item stats (impact, range, etc.)
+    # --- Stats and Sockets (instance-readable + display) ---
+    "DestinyStatDefinition",               # stat names (Range, Mobility, etc.)
     "DestinyStatGroupDefinition",          # stat groupings for items
-    "DestinyPlugSetDefinition",            # reusable mods/perks
-    "DestinySocketCategoryDefinition",     # socket categories (e.g., primary, special)
-    "DestinySocketTypeDefinition",         # socket compatibility
+    "DestinyPlugSetDefinition",            # reusable/randomized perk pools
+    "DestinySocketCategoryDefinition",     # socket categories (e.g., WEAPON PERKS, ARMOR MODS, COSMETICS, MASTERWORK)
+    "DestinySocketTypeDefinition",         # socket compatibility / plug whitelist
+    "DestinyEnergyTypeDefinition",         # armor energy type names (Any/Arc/Solar/Void/Stasis/Strand)
 
-    # --- Perks, Intrinsics, Traits ---
-    "DestinyTraitDefinition",              # item traits (foundry, slot, etc.)
+    # --- Perks / Traits (behavior flags vs. plugs) ---
+    "DestinySandboxPerkDefinition",        # 302 sandbox perks (artifact passives, always-on behaviors)
+    "DestinyTraitDefinition",              # foundry/slot traits (for labeling & grouping)
 
-    # --- Damage Types ---
-    "DestinyDamageTypeDefinition",         # Arc, Solar, Void, Stasis, etc.
+    # --- Damage / Breakers ---
+    "DestinyDamageTypeDefinition",         # Arc, Solar, Void, Stasis, Strand, Kinetic/None
+    "DestinyBreakerTypeDefinition",        # Barrier/Overload/Unstoppable (for artifact anti-champion context)
 
-    # --- Artifacts ---
-    "DestinyArtifactDefinition",           # seasonal artifacts
+    # --- Artifacts / Unlocks ---
+    "DestinyArtifactDefinition",           # seasonal artifacts & their socket layout
+    "DestinyUnlockDefinition",             # equip/feature gates (e.g., cannotEquipReason, artifact unlock flags)
 
-    # --- Subclass and Class Info ---
+    # --- Subclass and Class Info (for loadout labeling) ---
     "DestinyClassDefinition",              # Titan, Hunter, Warlock
     "DestinyRaceDefinition",               # Human, Awoken, Exo
 ]
