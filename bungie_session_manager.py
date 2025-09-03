@@ -10,7 +10,7 @@ Responsibilities:
 """
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 from azure.core.exceptions import (AzureError, ResourceExistsError,
@@ -57,6 +57,7 @@ class BungieSessionManager:
         self.api_base = api_base
         self.timeout = timeout
         self._token_expiry_margin = 60  # seconds before expiry to refresh
+        self._session_cache = None  # In-memory cache for session entity
 
     def _get_token_entity(self) -> dict | None:
         """
@@ -65,10 +66,14 @@ class BungieSessionManager:
         Returns:
             dict | None: Token entity if found, else None.
         """
+        # Check in-memory cache first
+        if self._session_cache is not None:
+            return self._session_cache
         table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
         table_client = table_service.get_table_client(self.table_name)
         try:
             entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
+            self._session_cache = entity
             return entity
         except ResourceNotFoundError:
             return None
@@ -113,11 +118,16 @@ class BungieSessionManager:
                     "AccessToken": token_data.get("access_token", ""),
                     "RefreshToken": token_data.get("refresh_token", ""),
                     "ExpiresIn": str(token_data.get("expires_in", "3600")),
-                    "IssuedAt": datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+                    "IssuedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
                 })
                 table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
                 table_client = table_service.get_table_client(self.table_name)
                 table_client.upsert_entity(entity=entity)
+                # Update in-memory cache after refresh
+                self._session_cache = entity
+        else:
+            # Update cache if not expired (in case cache was empty)
+            self._session_cache = entity
         return entity
 
     def exchange_code_for_token(self, code: str) -> dict:
@@ -174,10 +184,12 @@ class BungieSessionManager:
             "ExpiresIn": str(token_data.get("expires_in", "3600")),
             "membershipId": membership_id_val,
             "membershipType": membership_type_val,
-            "IssuedAt": datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            "IssuedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         }
         table_client.upsert_entity(entity=token_entity)
         logging.info("[session] Token data stored in table storage for session.")
+        # Update in-memory cache after token exchange
+        self._session_cache = token_entity
         return token_data
 
     def get_session(self) -> dict:
