@@ -9,12 +9,11 @@ Includes:
 - ORM models for SQL database schema.
 """
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 import requests
-from sqlalchemy import (BigInteger, Boolean, Column, DateTime, ForeignKey,
-                        Integer, String)
+from sqlalchemy import (BigInteger, Boolean, Column, DateTime, ForeignKey, ForeignKeyConstraint, Integer, String, Index, UniqueConstraint)
 from sqlalchemy.orm import declarative_base, relationship
 
 from bungie_session_manager import BungieSessionManager
@@ -42,7 +41,11 @@ class ItemModel(BaseModel):
     itemName: str
     itemType: str
     itemTier: Optional[str]
-    stats: Dict[str, int] = {}
+    stats: Dict[str, int] = dict()  # noqa: RUF012
+    perks: Dict[str, List[Dict[str, Any]]] = dict()
+    energy: Optional[Dict[str, Any]] = None  # {type_hash, type_name, capacity, used, unused}
+    sockets: Optional[List[Dict[str, Any]]] = None  # list of {index, visible, enabled, equipped{name,hash,icon}}
+    sandboxPerks: Optional[List[Dict[str, Any]]] = None  # 302 perks (artifact/passives)
     location: Optional[int]
     isEquipped: bool = False
     owner: Optional[str]
@@ -68,7 +71,7 @@ class ItemModel(BaseModel):
         """
         manifest_cache.ensure_manifest()
         norm_hash = raw_data.get("itemHash")
-        item_def, _ = manifest_cache.resolve_manifest_hash(norm_hash)
+        item_def, _ = manifest_cache.resolve_manifest_hash(norm_hash, ["DestinyInventoryItemDefinition"])
         if not item_def:
             return cls(
                 itemHash=norm_hash,
@@ -76,31 +79,42 @@ class ItemModel(BaseModel):
                 itemName="Unknown",
                 itemType="Unknown",
                 itemTier=None,
-                stats={},
+                stats=dict(),
+                perks=dict(),
                 location=raw_data.get("location"),
                 isEquipped=raw_data.get("isEquipped", False),
                 owner=raw_data.get("owner")
             )
-        # pylint: disable=invalid-name
-        itemName = item_def.get("displayProperties", {}).get("name", "Unknown")
-        itemType = item_def.get("itemTypeDisplayName", "Unknown")
-        itemTier = item_def.get("inventory", {}).get("tierTypeName", "Unknown")
-        stats = {}
+        item_name = item_def.get("displayProperties", {}).get("name", "Unknown")
+        item_type = item_def.get("itemTypeDisplayName", "Unknown")
+        item_tier = item_def.get("inventory", {}).get("tierTypeName", "Unknown")
+        item_stats = {}
+        item_perks = {}
         stats_def = item_def.get("stats", {}).get("stats", {})
         for stat_hash, stat_obj in stats_def.items():
-            stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash)
+            stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash, ["DestinyStatDefinition"])
             stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
-            stats[stat_name] = stat_obj.get("value")
+            item_stats[stat_name] = stat_obj.get("value")
         if item_instance_id:
             instance_info = cls._build_instance_info(item_instance_id, session_manager, manifest_cache)
-            stats.update(instance_info.get("instanceStats", {}))
+            item_stats.update(instance_info.get("instanceStats", {}))
+            instance_info.pop("instanceStats", None)  # Remove stats to avoid duplication
+            item_perks.update(instance_info.get("instancePerks", {}))
+            # Add energy, sockets, sandboxPerks from instance_info
+            if "energy" in instance_info:
+                item_perks["energy"] = instance_info["energy"]
+            if "instanceSockets" in instance_info:
+                item_perks["sockets"] = instance_info["instanceSockets"]
+            if "sandboxPerks" in instance_info:
+                item_perks["sandboxPerks"] = instance_info["sandboxPerks"]
         return cls(
             itemHash=norm_hash,
             itemInstanceId=item_instance_id or raw_data.get("itemInstanceId"),
-            itemName=itemName,
-            itemType=itemType,
-            itemTier=itemTier,
-            stats=stats,
+            itemName=item_name,
+            itemType=item_type,
+            itemTier=item_tier,
+            stats=item_stats,
+            perks=item_perks,
             location=raw_data.get("location"),
             isEquipped=raw_data.get("isEquipped", False),
             owner=raw_data.get("owner")
@@ -123,66 +137,91 @@ class ItemModel(BaseModel):
             dict: Instance-specific item info including perks, stats, masterwork, and mods.
         """
         session = session_manager.get_session()
-        access_token = session["access_token"]
-        membership_id = session["membership_id"]
-        membership_type = session["membership_type"]
-        if not all([membership_id, membership_type]):
-            return None
+        access_token = session.get("access_token")
+        membership_id = session.get("membership_id")
+        membership_type = session.get("membership_type")
+        if not membership_id or not membership_type or not access_token:
+            return {}
         headers_auth = {
             "Authorization": f"Bearer {access_token}",
-            "X-API-Key": session_manager.api_key
+            "X-API-Key": session_manager.api_key,
         }
 
-        # Fetch item instance data
-        instance_url = f"{session_manager.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/Item/{item_instance_id}/?components=300,302,304"
+        instance_url = (
+            f"{session_manager.api_base}/Destiny2/{membership_type}/Profile/"
+            f"{membership_id}/Item/{item_instance_id}/?components=300,302,304,305"
+        )
         instance_resp = retry_request(requests.get, instance_url, headers=headers_auth, timeout=session_manager.timeout)
         if not instance_resp.ok:
-            return None
-        instance_data = instance_resp.json()["Response"]
-        info = {}
-        inst_stats = instance_data["stats"]["data"]["stats"]
+            return {}
+        instance_data = instance_resp.json().get("Response", {})
+
+        info: Dict[str, Any] = {}
+
+        # 300 — energy (armor) & basic equip flags if present
+        inst = instance_data.get("instance", {}).get("data", {})
+        energy = inst.get("energy")
+        if energy:
+            et_hash = energy.get("energyTypeHash")
+            et_def, _ = manifest_cache.resolve_manifest_hash(et_hash, ["DestinyEnergyTypeDefinition"]) if et_hash is not None else (None, None)
+            info["energy"] = {
+                "type_hash": et_hash,
+                "type_name": (et_def or {}).get("displayProperties", {}).get("name"),
+                "capacity": energy.get("energyCapacity"),
+                "used": energy.get("energyUsed"),
+                "unused": energy.get("energyUnused"),
+            }
+
+        # 304 — instance stats (names resolved)
+        inst_stats = instance_data.get("stats", {}).get("data", {}).get("stats", {})
         if inst_stats:
-            stats_instance = {}
+            stats_instance: Dict[str, int] = {}
             for stat_hash, stat_obj in inst_stats.items():
-                stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash)
-                stat_name = stat_def.get("displayProperties", {}).get("name", stat_hash) if stat_def else stat_hash
+                stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash, ["DestinyStatDefinition"])
+                stat_name = (stat_def or {}).get("displayProperties", {}).get("name") or str(stat_hash)
                 stats_instance[stat_name] = stat_obj.get("value")
             info["instanceStats"] = stats_instance
-        perks_instance = []
-        masterwork_instance = None
-        mods_instance = []
-        for socket in instance_data.get("sockets", {}).get("socketEntries", []):
-            plug_hash = socket.get("singleInitialItemHash")
-            if plug_hash:
-                plug_def, _ = manifest_cache.resolve_manifest_hash(plug_hash)
-                if plug_def:
-                    display_name = plug_def.get("itemTypeDisplayName", "").lower()
-                    perks_instance.append({
-                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
-                        "description": plug_def.get("displayProperties", {}).get("description", ""),
-                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
-                        "plugItemHash": plug_hash
-                    })
-                    if "masterwork" in display_name:
-                        masterwork_instance = {
-                            "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
-                            "description": plug_def.get("displayProperties", {}).get("description", ""),
-                            "icon": plug_def.get("displayProperties", {}).get("icon", None),
-                            "plugItemHash": plug_hash
-                        }
-                    if "mod" in display_name:
-                        mods_instance.append({
-                            "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
-                            "description": plug_def.get("displayProperties", {}).get("description", ""),
-                            "icon": plug_def.get("displayProperties", {}).get("icon", None),
-                            "plugItemHash": plug_hash
-                        })
-        if perks_instance:
-            info["instancePerks"] = perks_instance
-        if masterwork_instance:
-            info["instanceMasterwork"] = masterwork_instance
-        if mods_instance:
-            info["instanceMods"] = mods_instance
+
+        # 302 — sandbox perks (artifact/passives)
+        sp_list = []
+        for p in instance_data.get("perks", {}).get("data", {}).get("perks", []) or []:
+            s_hash = p.get("perkHash")
+            if not s_hash:
+                continue
+            s_def, _ = manifest_cache.resolve_manifest_hash(s_hash, ["DestinySandboxPerkDefinition"])
+            dp = (s_def or {}).get("displayProperties", {})
+            sp_list.append({
+                "hash": s_hash,
+                "name": dp.get("name", str(s_hash)),
+                "icon": dp.get("icon"),
+                "active": p.get("isActive", False),
+                "visible": p.get("visible", False)
+            })
+        if sp_list:
+            info["sandboxPerks"] = sp_list
+
+        # 305 — sockets: equipped plugs only (no 310 here)
+        sockets = []
+        for idx, s in enumerate(instance_data.get("sockets", {}).get("data", {}).get("sockets", []) or []):
+            plug_hash = s.get("plugHash")
+            plug = None
+            if plug_hash is not None:
+                p_def, _ = manifest_cache.resolve_manifest_hash(plug_hash, ["DestinyInventoryItemDefinition"])
+                dp = (p_def or {}).get("displayProperties", {})
+                plug = {
+                    "hash": plug_hash,
+                    "name": dp.get("name", str(plug_hash)),
+                    "icon": dp.get("icon")
+                }
+            sockets.append({
+                "socketIndex": idx,
+                "isEnabled": s.get("isEnabled", False),
+                "isVisible": s.get("isVisible", False),
+                "equipped": plug
+            })
+        if sockets:
+            info["instanceSockets"] = sockets
+
         return info
 
 class CharacterModel(BaseModel):
@@ -199,7 +238,7 @@ class CharacterModel(BaseModel):
     charId: str
     name: str
     classType: str
-    items: List[ItemModel] = []
+    items: List[ItemModel] = list()
     data_version: Optional[datetime] = None
 
 class VaultModel(BaseModel):
@@ -210,7 +249,7 @@ class VaultModel(BaseModel):
         items (List[ItemModel]): List of items in the shared vault.
         data_version (Optional[datetime]): Bungie dateLastPlayed as datetime for freshness/version.
     """
-    items: List[ItemModel] = []
+    items: List[ItemModel] = list()
     data_version: Optional[datetime] = None
 
 # --- SQLAlchemy ORM Models ---
@@ -325,10 +364,21 @@ class ItemSocket(Base):
 class ItemPlug(Base):
     """
     Represents a plug (perk/mod) in a socket, tracks equipped state.
+    Composite FK to ItemSockets (item_id, socket_index).
     """
     __tablename__ = 'ItemPlugs'
-    item_id = Column(BigInteger, ForeignKey('ItemSockets.item_id'), primary_key=True)
-    socket_index = Column(Integer, ForeignKey('ItemSockets.socket_index'), primary_key=True)
+    item_id = Column(BigInteger, primary_key=True)
+    socket_index = Column(Integer, primary_key=True)
     plug_hash = Column(BigInteger, primary_key=True)
     is_equipped = Column(Boolean, default=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["item_id", "socket_index"],
+            ["ItemSockets.item_id", "ItemSockets.socket_index"],
+            name="fk_itemplugs_itemsockets"
+        ),
+        Index('idx_itemplugs_plug_hash', 'plug_hash'),
+    )
+
     socket = relationship("ItemSocket", back_populates="plugs")
