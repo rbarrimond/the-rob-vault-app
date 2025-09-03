@@ -16,6 +16,7 @@ import requests
 
 from helpers import normalize_item_hash, retry_request
 from constants import BUNGIE_REQUIRED_DEFS, BUNGIE_API_BASE, REQUEST_TIMEOUT, DEFAULT_HEADERS
+from collections import defaultdict
 
 
 class ManifestCache:
@@ -29,10 +30,18 @@ class ManifestCache:
     @classmethod
     def instance(cls, *args, **kwargs) -> "ManifestCache":
         """
-        Get the shared instance of the ManifestCache singleton.
+        Thread-safe shared instance getter for ManifestCache singleton.
         """
+        if not hasattr(cls, "_instance_lock"):
+            cls._instance_lock = threading.RLock()
         if cls._instance is None:
-            cls._instance = cls(*args, **kwargs)
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls(*args, **kwargs)
+                    cls._instance.ensure_manifest()
+                    cls._instance.prewarm_small_tables()
+        # else:
+        #     cls._instance.ensure_manifest()
         return cls._instance
 
     def __del__(self):
@@ -53,6 +62,9 @@ class ManifestCache:
         self.version = None
         self._lock = threading.RLock()
         self._conn = None
+        self._memo = defaultdict(dict)   # per-definition in-memory memo for single-hash lookups
+        self._small_defs = {}            # fully prewarmed small tables (stat names, energy types, etc.)
+        self._warned_single_get_definitions = False  # log deprecation once
 
     def ensure_manifest(self) -> bool:
         """
@@ -97,8 +109,7 @@ class ManifestCache:
                     manifest_files = [info for info in zf.infolist(
                     ) if info.filename.endswith('.content')]
                     if not manifest_files:
-                        logging.error(
-                            "No .content file found in manifest ZIP.")
+                        logging.error("No .content file found in manifest ZIP.")
                         return False
                     manifest_info = max(
                         manifest_files, key=lambda info: info.file_size)
@@ -122,10 +133,166 @@ class ManifestCache:
             if self._conn:
                 return self._conn
             if not os.path.exists(self.storage_path):
-                raise FileNotFoundError(
-                    f"Manifest DB not found at {self.storage_path}")
-            self._conn = sqlite3.connect(self.storage_path)
+                raise FileNotFoundError(f"Manifest DB not found at {self.storage_path}")
+            # Open read-only; allow cross-thread reads
+            self._conn = sqlite3.connect(f"file:{self.storage_path}?mode=ro", uri=True, check_same_thread=False)
+            # Read-only performance PRAGMAs (safe; no writes)
+            try:
+                self._conn.execute("PRAGMA journal_mode=OFF;")
+                self._conn.execute("PRAGMA synchronous=OFF;")
+                self._conn.execute("PRAGMA temp_store=MEMORY;")
+                self._conn.execute("PRAGMA cache_size=-32768;")    # ~32MB page cache
+                self._conn.execute("PRAGMA mmap_size=134217728;")  # 128MB mmap if supported
+            except Exception:
+                pass
             return self._conn
+
+    def prewarm_small_tables(self) -> None:
+        """
+        Preload small, frequently used definition tables into memory.
+        This avoids per-hash SQLite lookups for common names/types.
+        Safe because these tables are tiny (O(10-1000) rows).
+        """
+        small_types = [
+            "DestinyStatDefinition",
+            "DestinyEnergyTypeDefinition",
+            "DestinyDamageTypeDefinition",
+            "DestinyBreakerTypeDefinition",
+            "DestinySocketCategoryDefinition",
+            "DestinyClassDefinition",
+            "DestinyRaceDefinition",
+        ]
+        with self._lock:
+            for t in small_types:
+                try:
+                    self._small_defs[t] = self.get_all_definitions(t)  # full-table read (small only)
+                except Exception:
+                    continue
+
+    def get_definitions_batch(self, definition_type: str, item_hashes: list[int | str]) -> dict[str, dict]:
+        """
+        Batch resolve a list of hashes for a single definition type.
+        Returns dict keyed by unsigned string hash -> json dict.
+        """
+        if not item_hashes:
+            return {}
+        # Normalize and build signed/unsigned sets
+        u32s = []
+        i32s = []
+        seen = set()
+        for h in item_hashes:
+            try:
+                norm = int(normalize_item_hash(h))
+            except Exception:
+                continue
+            if norm in seen:
+                continue
+            seen.add(norm)
+            u32s.append(norm)
+            i32s.append(ctypes.c_int32(norm).value)
+        # Chunk because SQLite has a limit (~999 parameters)
+        def chunks(lst, n=400):
+            for i in range(0, len(lst), n):
+                yield lst[i:i+n]
+        out: dict[str, dict] = {}
+        with self._lock:
+            conn = self._connect()
+            cur = conn.cursor()
+            for us, is_ in zip(chunks(u32s), chunks(i32s)):
+                params = tuple(us + is_)
+                placeholders = ",".join("?" for _ in params)
+                try:
+                    cur.execute(f"SELECT id, json FROM {definition_type} WHERE id IN ({placeholders})", params)
+                    for row in cur.fetchall():
+                        try:
+                            uid = int(row[0]) & 0xFFFFFFFF
+                            out[str(uid)] = json.loads(row[1])
+                        except Exception:
+                            continue
+                except Exception as e:
+                    logging.error("Batch manifest lookup failed for %s (%d ids): %s", definition_type, len(params), e)
+        return out
+
+    def resolve_exact(self, item_hash: int | str, definition_type: str) -> dict | None:
+        """
+        Fast path: resolve a single hash against a specific definition.
+        Uses per-type memoization to avoid repeated DB hits.
+        """
+        try:
+            norm = int(normalize_item_hash(item_hash))
+        except Exception:
+            return None
+        memo = self._memo[definition_type]
+        key = str(norm)
+        if key in memo:
+            return memo[key]
+        # direct single-row SQL to avoid get_definitions single-hash path
+        with self._lock:
+            conn = self._connect()
+            cursor = conn.cursor()
+            signed_hash = ctypes.c_int32(norm).value
+            try:
+                cursor.execute(
+                    f"SELECT json FROM {definition_type} WHERE id IN (?, ?) LIMIT 1",
+                    (signed_hash, norm),
+                )
+                row = cursor.fetchone()
+                if row:
+                    result = json.loads(row[0])
+                    memo[key] = result
+                    return result
+            except Exception as e:
+                logging.error("Manifest lookup failed for %s (u32=%s, i32=%s): %s", definition_type, norm, signed_hash, e)
+        return None
+
+    def resolve_many(self, hashes: list[int | str], definition_type: str) -> dict[str, dict]:
+        """
+        Fast path: resolve many hashes for one definition type with memo + batch SQL.
+        """
+        # Partition into (cached) and (misses)
+        norm_hashes = []
+        misses = []
+        memo = self._memo[definition_type]
+        for h in hashes:
+            try:
+                norm = int(normalize_item_hash(h))
+            except Exception:
+                continue
+            norm_hashes.append(norm)
+            if str(norm) not in memo:
+                misses.append(norm)
+        # Batch fetch misses
+        if misses:
+            fetched = self.get_definitions_batch(definition_type, misses)
+            memo.update(fetched)
+        # Build output from memo for all requested (including duplicates)
+        out = {}
+        for n in norm_hashes:
+            v = memo.get(str(n))
+            if v:
+                out[str(n)] = v
+        return out
+
+    def get_all_definitions(self, definition_type: str) -> dict:
+        """
+        Fast full-table read for *small* definition tables.
+        Returns a mapping of unsigned string hash -> definition json.
+        """
+        defs = {}
+        with self._lock:
+            conn = self._connect()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(f"SELECT id, json FROM {definition_type}")
+                for row in cursor.fetchall():
+                    try:
+                        uid = int(row[0]) & 0xFFFFFFFF
+                        defs[str(uid)] = json.loads(row[1])
+                    except Exception:
+                        continue
+            except Exception as e:
+                logging.error("Manifest get_all_definitions failed for %s: %s", definition_type, e)
+        return defs
 
     def get_definitions(self, definition_type: str, item_hash: str | int = None) -> dict | None:
         """
@@ -142,9 +309,14 @@ class ManifestCache:
             conn = self._connect()
             cursor = conn.cursor()
             if item_hash is not None:
+                # DEPRECATED single-hash path: prefer resolve_exact(...)
+                logging.debug("get_definitions(single) is deprecated; use resolve_exact for %s", definition_type)
                 norm_hash = normalize_item_hash(item_hash)  # unsigned u32
                 # two's complement signed form
                 signed_hash = ctypes.c_int32(int(norm_hash)).value
+                if not self._warned_single_get_definitions:
+                    logging.warning("get_definitions(single) is deprecated; use resolve_exact for %s", definition_type)
+                    self._warned_single_get_definitions = True
                 try:
                     cursor.execute(
                         f"SELECT json FROM {definition_type} WHERE id IN (?, ?) LIMIT 1",
@@ -186,16 +358,19 @@ class ManifestCache:
         Returns:
             tuple: (definition object, definition type) if found, otherwise (None, None).
         """
-        logging.debug("Attempting to resolve manifest hash: %s across types: %s",
-                      item_hash, definition_types if definition_types else BUNGIE_REQUIRED_DEFS)
+        logging.debug("Attempting to resolve manifest hash: %s across types: %s", item_hash, definition_types if definition_types else BUNGIE_REQUIRED_DEFS)
+        if definition_types and len(definition_types) == 1:
+            d = definition_types[0]
+            hit = self.resolve_exact(item_hash, d)
+            return (hit, d) if hit else (None, None)
         if not definition_types:
             definition_types = BUNGIE_REQUIRED_DEFS
-        item_hash = str(item_hash)
+        # Try each type with resolve_exact (fast path with memo + direct SQL)
         for def_type in definition_types:
-            defs = self.get_definitions(def_type, item_hash)
-            if defs:
+            hit = self.resolve_exact(item_hash, def_type)
+            if hit:
                 logging.info("Manifest hash %s found in %s.", item_hash, def_type)
-                return defs, def_type
+                return hit, def_type
             else:
                 logging.debug("Manifest hash %s not found in %s.", item_hash, def_type)
         return None, None
