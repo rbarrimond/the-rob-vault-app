@@ -113,7 +113,7 @@ class BungieSessionManager:
                     "AccessToken": token_data.get("access_token", ""),
                     "RefreshToken": token_data.get("refresh_token", ""),
                     "ExpiresIn": str(token_data.get("expires_in", "3600")),
-                    "IssuedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+                    "IssuedAt": datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
                 })
                 table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
                 table_client = table_service.get_table_client(self.table_name)

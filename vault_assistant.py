@@ -117,11 +117,11 @@ class VaultAssistant:
         """
         session = self.get_session()
         access_token = session["access_token"]
-        membership_info = self.session_manager.get_membership_info(access_token)
-        if not membership_info:
+        membership_id = session["membership_id"]
+        membership_type = session["membership_type"]
+        if not all([membership_id, membership_type]):
             logging.error("No Destiny memberships found for user.")
             return None, 404
-        membership_id, membership_type = membership_info
         # Ensure manifest is loaded using ManifestCache
         manifest_ready = self.manifest_cache.ensure_manifest()
         # Get character list
@@ -183,11 +183,11 @@ class VaultAssistant:
         """
         session = self.get_session()
         access_token = session["access_token"]
-        membership_info = self.get_membership_info(access_token)
-        if not membership_info:
+        membership_id = session["membershipId"]
+        membership_type = session["membershipType"]
+        if not all([membership_id, membership_type]):
             logging.error("No Destiny memberships found for user.")
             return None, 404
-        membership_id, membership_type = membership_info
 
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -252,11 +252,11 @@ class VaultAssistant:
             "Authorization": f"Bearer {access_token}",
             "X-API-Key": self.api_key
         }
-        membership_info = self.get_membership_info(access_token)
-        if not membership_info:
+        membership_id = session["membershipId"]
+        membership_type = session["membershipType"]
+        if not all([membership_id, membership_type]):
             logging.error("No Destiny memberships found for user.")
             return None, 404
-        membership_id, membership_type = membership_info
 
         # Get Bungie profile lastModified
         get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
