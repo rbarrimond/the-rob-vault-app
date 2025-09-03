@@ -10,6 +10,7 @@ Responsibilities:
 """
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 
 import requests
@@ -17,8 +18,8 @@ from azure.core.exceptions import (AzureError, ResourceExistsError,
                                    ResourceNotFoundError)
 from azure.data.tables import TableServiceClient
 
-from constants import (API_KEY, BUNGIE_API_BASE,
-                       REQUEST_TIMEOUT, STORAGE_CONNECTION_STRING, TABLE_NAME)
+from constants import (API_KEY, BUNGIE_API_BASE, REQUEST_TIMEOUT,
+                       STORAGE_CONNECTION_STRING, TABLE_NAME)
 from helpers import retry_request
 
 
@@ -32,6 +33,25 @@ class BungieSessionManager:
         - Store/retrieve session info in Azure Table Storage
         - Persist and provide current session (access token, membershipId, membershipType)
     """
+
+    _instance = None
+    _lock:threading.Lock = None
+
+    @classmethod
+    def instance(cls, *args, **kwargs):
+        """
+        Singleton factory method for BungieSessionManager.
+        Ensures token is valid on first creation.
+        """
+        if cls._lock is None:
+            cls._lock = threading.Lock()
+        if cls._instance is None:
+            #pylint: disable=protected-access, not-context-manager
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls(*args, **kwargs)
+                    cls._instance._ensure_token_valid()
+        return cls._instance
 
     def __init__(
         self,
@@ -58,6 +78,7 @@ class BungieSessionManager:
         self.timeout = timeout
         self._token_expiry_margin = 60  # seconds before expiry to refresh
         self._session_cache = None  # In-memory cache for session entity
+        self._session_last_checked = None
 
     def _get_token_entity(self) -> dict | None:
         """
@@ -66,9 +87,6 @@ class BungieSessionManager:
         Returns:
             dict | None: Token entity if found, else None.
         """
-        # Check in-memory cache first
-        if self._session_cache is not None:
-            return self._session_cache
         table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
         table_client = table_service.get_table_client(self.table_name)
         try:
@@ -81,14 +99,15 @@ class BungieSessionManager:
             logging.error("Azure Table error in _get_token_entity: %s", e)
             return None
 
-    def _is_token_expired(self) -> bool:
+    def _is_token_expired(self, entity: dict | None = None) -> bool:
         """
         Check if the current token is expired or near expiry.
 
         Returns:
             bool: True if expired or near expiry, False otherwise.
         """
-        entity = self._get_token_entity()
+        if entity is None:
+            entity = self._session_cache
         if not entity:
             return True
         expires_in = int(entity.get("ExpiresIn", "3600"))
@@ -100,17 +119,22 @@ class BungieSessionManager:
         elapsed = (now - issued_at_dt).total_seconds()
         return elapsed > (expires_in - self._token_expiry_margin)
 
-    def ensure_token_valid(self) -> dict | None:
+    def _ensure_token_valid(self) -> dict | None:
         """
-        Ensure the token is valid, refreshing if expired.
+        Ensure the token is valid, refreshing if expired. Private.
 
         Returns:
             dict | None: Valid token entity, or None if not found.
         """
-        entity = self._get_token_entity()
+        # Use cache if available
+        entity = self._session_cache
+        if entity is None:
+            # First time: fetch from table
+            entity = self._get_token_entity()
         if not entity:
             return None
-        if self._is_token_expired():
+        if self._is_token_expired(entity):
+            # Token expired, refresh from Bungie API
             refresh_token_val = entity.get("RefreshToken")
             if refresh_token_val:
                 token_data, _ = self.refresh_token(refresh_token_val)
@@ -123,12 +147,11 @@ class BungieSessionManager:
                 table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
                 table_client = table_service.get_table_client(self.table_name)
                 table_client.upsert_entity(entity=entity)
-                # Update in-memory cache after refresh
                 self._session_cache = entity
         else:
-            # Update cache if not expired (in case cache was empty)
+            # Token is valid, just use cache
             self._session_cache = entity
-        return entity
+        return self._session_cache
 
     def exchange_code_for_token(self, code: str) -> dict:
         """
@@ -202,7 +225,7 @@ class BungieSessionManager:
                 - membershipId (str): Destiny membership ID
                 - membershipType (str): Destiny membership type
         """
-        entity = self.ensure_token_valid()
+        entity = self._session_cache
         if not entity:
             return {"access_token": None, "membership_id": None, "membership_type": None}
         return {
