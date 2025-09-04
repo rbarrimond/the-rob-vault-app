@@ -33,7 +33,7 @@ from constants import (
     BUNGIE_API_BASE,
     REQUEST_TIMEOUT
 )
-from models import ItemModel
+from models import ItemModel, VaultModel, CharacterModel
 
 class VaultAssistant:
     """
@@ -70,7 +70,7 @@ class VaultAssistant:
         self.blob_container = blob_container
         self.api_base = api_base
         self.timeout = timeout
-        self.manifest_cache = ManifestCache()
+        self.manifest_cache = ManifestCache.instance()
         self.session_manager = BungieSessionManager.instance()
         self.db_agent = None  # Ensure db_agent attribute always exists
 
@@ -374,7 +374,7 @@ class VaultAssistant:
 
     def decode_vault(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
         """
-        Decode the vault inventory using ItemModel.from_raw_data() for each item. Optionally include perks. Supports pagination.
+        Decode the vault inventory using VaultModel.from_components for each item. Optionally include perks. Supports pagination.
 
         Args:
             include_perks (bool): If True, include perks for each item.
@@ -393,19 +393,19 @@ class VaultAssistant:
             return [], 404
         items = json.loads(blob_data)
         paged_items = items[offset:offset + limit] if limit is not None else items[offset:]
+        # Use VaultModel.from_components to decode and enrich inventory
+        vault_model = VaultModel.from_components(paged_items, {})
         decoded_items = []
-        for item in paged_items:
-            item_instance_id = item.get("itemInstanceId")
-            item_model = ItemModel.from_raw_data(item, self.session_manager, self.manifest_cache, item_instance_id)
-            decoded = item_model.model_dump()
-            if include_perks and hasattr(item_model, "perks"):
-                decoded["perks"] = item_model.perks
+        for item in vault_model.items:
+            decoded = item.model_dump()
+            if include_perks and hasattr(item, "perks"):
+                decoded["perks"] = item.perks
             decoded_items.append(decoded)
         return decoded_items, 200
 
     def decode_characters(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
         """
-        Decode the character equipment using manifest definitions. Optionally include perks. Supports pagination.
+        Decode the character equipment using CharacterModel.from_components for each character. Optionally include perks. Supports pagination.
 
         Args:
             include_perks (bool): If True, include perks for each item.
@@ -415,7 +415,42 @@ class VaultAssistant:
         Returns:
             tuple: (decoded items list, status_code)
         """
-        return self._decode_blob(source="characters", include_perks=include_perks, limit=limit, offset=offset), 200
+        session = self.get_session()
+        membership_id = session["membership_id"]
+        blob_name = f"{membership_id}-characters.json"
+        blob_data = load_blob(self.storage_conn_str, self.blob_container, blob_name)
+        if blob_data is None:
+            logging.error("Character blob not found for user: %s", membership_id)
+            return [], 404
+
+        raw = json.loads(blob_data)
+        if not isinstance(raw, dict):
+            logging.error("Unexpected characters blob format (expected dict of characterId->{items}).")
+            return [], 400
+
+        decoded_characters: list[dict] = []
+
+        for char_id, char_data in raw.items():
+            char_items = char_data.get("items", [])
+            paged_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
+
+            # Build a CharacterModel from the raw items. We don't have per-instance components pre-fetched,
+            # so pass an empty mapping; ItemModel may fetch instance data as needed.
+            char_model = CharacterModel.from_components({"characterId": char_id}, paged_items, {})
+
+            # Dump model → dict and (optionally) strip perks
+            char_dict = char_model.model_dump()
+            cleaned_items: list[dict] = []
+            for it in char_model.items:
+                it_dict = it.model_dump()
+                if not include_perks and "perks" in it_dict:
+                    # Remove perks unless explicitly requested
+                    it_dict.pop("perks", None)
+                cleaned_items.append(it_dict)
+            char_dict["items"] = cleaned_items
+            decoded_characters.append(char_dict)
+
+        return decoded_characters, 200
 
     def get_session_token(self) -> tuple[dict, int]:
         """
