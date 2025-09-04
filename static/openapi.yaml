@@ -441,10 +441,133 @@ components:
       name: x-functions-key
       in: header
   schemas:
-    VaultItem:
+    ItemModel:
       type: object
       properties:
-        id:
+        itemHash:
+          type: integer
+        itemInstanceId:
+          type:
+            - string
+            - "null"
+        itemName:
+          type: string
+        itemType:
+          type: string
+        itemTier:
+          type:
+            - string
+            - "null"
+        stats:
+          type: object
+          additionalProperties:
+            type: integer
+        perks:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+        energy:
+          type:
+            - object
+            - "null"
+          properties:
+            type_hash:
+              type:
+                - integer
+                - "null"
+            type_name:
+              type:
+                - string
+                - "null"
+            capacity:
+              type:
+                - integer
+                - "null"
+            used:
+              type:
+                - integer
+                - "null"
+            unused:
+              type:
+                - integer
+                - "null"
+        sockets:
+          type:
+            - array
+            - "null"
+          items:
+            type: object
+            properties:
+              socketIndex:
+                type: integer
+              isEnabled:
+                type: boolean
+              isVisible:
+                type: boolean
+              equipped:
+                type:
+                  - object
+                  - "null"
+                additionalProperties: true
+        sandboxPerks:
+          type:
+            - array
+            - "null"
+          items:
+            type: object
+            properties:
+              hash:
+                type: integer
+              name:
+                type: string
+              icon:
+                type:
+                  - string
+                  - "null"
+              active:
+                type: boolean
+              visible:
+                type: boolean
+        location:
+          type:
+            - integer
+            - "null"
+        isEquipped:
+          type: boolean
+        owner:
+          type:
+            - string
+            - "null"
+    CharacterModel:
+      type: object
+      properties:
+        charId:
           type: string
         name:
           type: string
+        classType:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItemModel'
+        data_version:
+          type:
+            - string
+            - "null"
+          format: date-time
+    VaultModel:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItemModel'
+        data_version:
+          type:
+            - string
+            - "null"
+          format: date-time
