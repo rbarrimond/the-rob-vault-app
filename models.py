@@ -171,6 +171,13 @@ class ItemModel(BaseModel):
                 perks["sockets"] = inst_info["instanceSockets"]
             if "sandboxPerks" in inst_info:
                 perks["sandboxPerks"] = inst_info["sandboxPerks"]
+            if "reusablePlugs" in inst_info:
+                # Ensure all keys in reusablePlugs are strings for Pydantic compatibility
+                reusable_plugs = inst_info["reusablePlugs"]
+                if isinstance(reusable_plugs, dict):
+                    perks["reusablePlugs"] = {str(k): v for k, v in reusable_plugs.items()}
+                else:
+                    perks["reusablePlugs"] = reusable_plugs
 
         return cls(
             itemHash=item_hash,
@@ -288,7 +295,7 @@ class ItemModel(BaseModel):
                         dp = (d or {}).get("displayProperties", {})
                         choices.append({"hash": h, "name": dp.get("name", str(h)), "icon": dp.get("icon")})
                     if choices:
-                        reusable_out[idx] = choices
+                        reusable_out[str(idx)] = choices
                 if reusable_out:
                     perks["reusablePlugs"] = reusable_out
 
@@ -426,11 +433,11 @@ class ItemModel(BaseModel):
                     dp = (p_def or {}).get("displayProperties", {})
                     choices.append({
                         "hash": plug_hash,
-                        "name": dp.get("name", str(plug_hash)),
+                        "name": dp.get("itemTypeDisplayName", dp.get("name", str(plug_hash))),
                         "icon": dp.get("icon")
                     })
                 if choices:
-                    reusable_out[idx] = choices
+                    reusable_out[str(idx)] = choices
             if reusable_out:
                 info["reusablePlugs"] = reusable_out
 
