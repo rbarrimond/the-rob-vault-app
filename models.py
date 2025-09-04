@@ -208,9 +208,7 @@ class ItemModel(BaseModel):
             if "sandboxPerks" in inst_info:
                 perks["sandboxPerks"] = inst_info["sandboxPerks"]
             if "reusablePlugs" in inst_info:
-                ro_list = list()
-                ro_list.append(inst_info["reusablePlugs"])
-                perks["reusablePlugs"] = ro_list
+                perks["reusablePlugs"] = inst_info["reusablePlugs"]
 
         return cls(
             itemHash=item_hash,
