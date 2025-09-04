@@ -91,13 +91,13 @@ class ItemModel(BaseModel):
             if energy:
                 et_hash = energy.get("energyTypeHash")
                 et_def, _ = manifest_cache.resolve_manifest_hash(et_hash, ["DestinyEnergyTypeDefinition"]) if et_hash is not None else (None, None)
-                perks["energy"] = {
+                perks["energy"] = [{
                     "type_hash": et_hash,
                     "type_name": (et_def or {}).get("displayProperties", {}).get("name"),
                     "capacity": energy.get("energyCapacity"),
                     "used": energy.get("energyUsed"),
                     "unused": energy.get("energyUnused"),
-                }
+                }]
             # 304 stats
             for stat_hash, stat_obj in ((components.get("stats") or {}).get("data", {}).get("stats", {}) .items()):
                 stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash, ["DestinyStatDefinition"])  # type: ignore
@@ -138,13 +138,35 @@ class ItemModel(BaseModel):
             if sockets_out:
                 perks["sockets"] = sockets_out
 
+            # 310 reusable plugs (choices per socket)
+            rp = ((components.get("reusablePlugs") or {}).get("data", {}) or {}).get("plugs", {})
+            if rp:
+                reusable_out = {}
+                for idx_str, plugs in rp.items():
+                    try:
+                        idx = int(idx_str)
+                    except Exception:
+                        continue
+                    choices = []
+                    for p in plugs or []:
+                        h = p.get("plugItemHash")
+                        if h is None:
+                            continue
+                        d, _ = manifest_cache.resolve_manifest_hash(h, ["DestinyInventoryItemDefinition"])  # type: ignore
+                        dp = (d or {}).get("displayProperties", {})
+                        choices.append({"hash": h, "name": dp.get("name", str(h)), "icon": dp.get("icon")})
+                    if choices:
+                        reusable_out[idx] = choices
+                if reusable_out:
+                    perks["reusablePlugs"] = reusable_out
+
         # If no components provided, fetch instance info using singleton managers
         if not components and raw_item.get("itemInstanceId"):
             session_manager = BungieSessionManager.instance()
             inst_info = cls._build_instance_info(raw_item.get("itemInstanceId"), session_manager, manifest_cache)
             stats.update(inst_info.get("instanceStats", {}))
             if "energy" in inst_info:
-                perks["energy"] = inst_info["energy"]
+                perks["energy"] = [inst_info["energy"]]
             if "instanceSockets" in inst_info:
                 perks["sockets"] = inst_info["instanceSockets"]
             if "sandboxPerks" in inst_info:
@@ -206,13 +228,13 @@ class ItemModel(BaseModel):
             if energy:
                 et_hash = energy.get("energyTypeHash")
                 et_def, _ = manifest_cache.resolve_manifest_hash(et_hash, ["DestinyEnergyTypeDefinition"]) if et_hash is not None else (None, None)
-                perks["energy"] = {
+                perks["energy"] = [{
                     "type_hash": et_hash,
                     "type_name": (et_def or {}).get("displayProperties", {}).get("name"),
                     "capacity": energy.get("energyCapacity"),
                     "used": energy.get("energyUsed"),
                     "unused": energy.get("energyUnused"),
-                }
+                }]
             # 302 sandbox perks
             sps: List[Dict[str, Any]] = []
             for p in ((item_components.get("perks") or {}).get("data", {}).get("perks", []) or []):
@@ -247,6 +269,28 @@ class ItemModel(BaseModel):
                 })
             if sock_out:
                 perks["sockets"] = sock_out
+
+            # 310 reusable plugs (choices per socket) using pre-resolved plug defs
+            rp = ((item_components.get("reusablePlugs") or {}).get("data", {}) or {}).get("plugs", {})
+            if rp:
+                reusable_out = {}
+                for idx_str, plugs in rp.items():
+                    try:
+                        idx = int(idx_str)
+                    except Exception:
+                        continue
+                    choices = []
+                    for p in plugs or []:
+                        h = p.get("plugItemHash")
+                        if h is None:
+                            continue
+                        d = plug_defs.get(str(int(h) & 0xFFFFFFFF), {})
+                        dp = (d or {}).get("displayProperties", {})
+                        choices.append({"hash": h, "name": dp.get("name", str(h)), "icon": dp.get("icon")})
+                    if choices:
+                        reusable_out[idx] = choices
+                if reusable_out:
+                    perks["reusablePlugs"] = reusable_out
 
         return cls(
             itemHash=item_hash,
@@ -291,7 +335,7 @@ class ItemModel(BaseModel):
 
         instance_url = (
             f"{session_manager.api_base}/Destiny2/{membership_type}/Profile/"
-            f"{membership_id}/Item/{item_instance_id}/?components=300,302,304,305"
+            f"{membership_id}/Item/{item_instance_id}/?components=300,302,304,305,310"
         )
         instance_resp = retry_request(requests.get, instance_url, headers=headers_auth, timeout=session_manager.timeout)
         if not instance_resp.ok:
@@ -363,6 +407,32 @@ class ItemModel(BaseModel):
             })
         if sockets:
             info["instanceSockets"] = sockets
+
+        # 310 — reusable plugs: all candidate plugs available per socket for this instance
+        reusable_plugs = instance_data.get("reusablePlugs", {}).get("data", {}).get("plugs", {})
+        if reusable_plugs:
+            reusable_out = {}
+            for idx_str, plugs in (reusable_plugs or {}).items():
+                try:
+                    idx = int(idx_str)
+                except Exception:
+                    continue
+                choices = []
+                for p in plugs or []:
+                    plug_hash = p.get("plugItemHash")
+                    if plug_hash is None:
+                        continue
+                    p_def, _ = manifest_cache.resolve_manifest_hash(plug_hash, ["DestinyInventoryItemDefinition"])  # type: ignore
+                    dp = (p_def or {}).get("displayProperties", {})
+                    choices.append({
+                        "hash": plug_hash,
+                        "name": dp.get("name", str(plug_hash)),
+                        "icon": dp.get("icon")
+                    })
+                if choices:
+                    reusable_out[idx] = choices
+            if reusable_out:
+                info["reusablePlugs"] = reusable_out
 
         return info
 
