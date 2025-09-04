@@ -140,7 +140,7 @@ class VaultAssistant:
             class_type = char["classType"]
             race_hash = char["raceHash"]
             class_name = CLASS_TYPE_MAP.get(class_type, str(class_type))
-            race_def = self.manifest_cache.get_definitions("DestinyRaceDefinition", race_hash)
+            race_def = self.manifest_cache.resolve_exact(race_hash, "DestinyRaceDefinition" )
             race_name = race_def.get("displayProperties", {}).get("name") if race_def else str(race_hash)
             character_summary[char_id] = {
                 "classType": class_type,

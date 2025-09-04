@@ -1,4 +1,4 @@
-# pylint: disable=line-too-long
+# pylint: disable=line-too-long, broad-exception-caught
 """
 Models for Destiny 2 vault and character inventory management.
 
