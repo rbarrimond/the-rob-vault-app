@@ -247,6 +247,7 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
         func.HttpResponse: JSON response with inventory items or error.
     """
     logging.info("[vault] GET request received.")
+    logging.info("[vault] Query params: limit=%s, offset=%s", req.params.get('limit'), req.params.get('offset'))
     try:
         limit = req.params.get("limit")
         offset = req.params.get("offset")
@@ -261,8 +262,10 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to get vault inventory", status_code=status)
     # Apply pagination
     paged_inventory = inventory[offset:offset+limit] if limit is not None else inventory[offset:]
-    logging.info("[vault] Successfully returned vault inventory.")
+    logging.debug("[vault] Pagination applied: offset=%s, limit=%s, returned_items=%s", offset, limit, len(paged_inventory))
     response_json = json.dumps(paged_inventory, indent=2)
+    logging.debug("[vault] Response size: %s bytes", len(response_json))
+    logging.info("[vault] Successfully returned vault inventory.")
     return compress_response_if_requested(response_json, req, status_code=status)
 
 
@@ -277,6 +280,7 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
         func.HttpResponse: JSON response with character equipment or error.
     """
     logging.info("[characters] GET request received.")
+    logging.debug("[characters] Query params: limit=%s, offset=%s", req.params.get('limit'), req.params.get('offset'))
     try:
         limit = req.params.get("limit")
         offset = req.params.get("offset")
@@ -290,16 +294,22 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
             "[characters] Failed to get character equipment. Status: %d", status)
         return func.HttpResponse("Failed to get character equipment", status_code=status)
     # Apply pagination per character
+    total_items = 0
     if isinstance(equipment, dict):
         paged_equipment = {}
         for char_id, char_data in equipment.items():
             items = char_data.get("items", [])
             paged_items = items[offset:offset+limit] if limit is not None else items[offset:]
             paged_equipment[char_id] = {**char_data, "items": paged_items}
+            total_items += len(paged_items)
+        logging.debug("[characters] Pagination applied: offset=%s, limit=%s, characters=%s, total_items_returned=%s", offset, limit, len(paged_equipment), total_items)
     else:
         paged_equipment = equipment
-    logging.info("[characters] Successfully returned character equipment.")
+        total_items = len(paged_equipment) if isinstance(paged_equipment, list) else 1
+        logging.debug("[characters] Pagination applied: offset=%s, limit=%s, total_items_returned=%s", offset, limit, total_items)
     response_json = json.dumps(paged_equipment, indent=2)
+    logging.debug("[characters] Response size: %s bytes", len(response_json))
+    logging.info("[characters] Successfully returned character equipment.")
     return compress_response_if_requested(response_json, req, status_code=status)
 
 
