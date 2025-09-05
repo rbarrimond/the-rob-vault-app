@@ -411,6 +411,13 @@ class CharacterModel(BaseModel):
     charId: str
     name: str
     classType: str
+    race: str
+    gender: str
+    light: int
+    emblem: str
+    emblemBackground: str
+    level: int
+    lastPlayed: datetime
     items: List[ItemModel] = list()
     data_version: Optional[datetime] = None
 
@@ -427,14 +434,33 @@ class CharacterModel(BaseModel):
         """
         char_id = str(character_blob.get("characterId"))
         name = character_blob.get("displayName") or char_id
-        class_type = character_blob.get("classTypeLabel") or str(character_blob.get("classType"))
+        class_type = character_blob.get("class") or str(character_blob.get("classType"))
+        race = character_blob.get("race") or str(character_blob.get("raceHash"))
+        gender = character_blob.get("gender") or str(character_blob.get("genderHash"))
+        light = character_blob.get("light") or 0
+        emblem = character_blob.get("emblem") or ""
+        emblem_background = character_blob.get("emblemBackground") or ""
+        level = character_blob.get("level") or 0
+        last_played = character_blob.get("lastPlayed") or datetime.min
 
         items: List[ItemModel] = []
         for it in items_raw:
             iid = it.get("itemInstanceId")
             comps = components_by_instance.get(str(iid)) if iid else None
             items.append(ItemModel.from_components(it, components=comps))
-        return cls(charId=char_id, name=name, classType=class_type, items=items)
+        return cls(
+            charId=char_id,
+            name=name,
+            classType=class_type,
+            race=race,
+            gender=gender,
+            light=light,
+            emblem=emblem,
+            emblemBackground=emblem_background,
+            level=level,
+            lastPlayed=last_played,
+            items=items
+        )
 
 class VaultModel(BaseModel):
     """

@@ -287,22 +287,46 @@ class VaultAssistant:
             inventory_data = json.loads(blob_data)
             return inventory_data, 200
 
-        # Otherwise, fetch fresh inventory and update blob
-        char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=201"
+        # Otherwise, fetch fresh character summary and inventory, then enrich
+        char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=200,201"
         char_resp = retry_request(
             requests.get, char_url, headers=headers, timeout=self.timeout)
         if not char_resp.ok:
-            logging.error("Failed to get character inventories: status %d", char_resp.status_code)
+            logging.error("Failed to get character data: status %d", char_resp.status_code)
             return None, char_resp.status_code
         resp_json = char_resp.json()["Response"]
+        char_data = resp_json["characters"]["data"]
         inventory_data = resp_json["characterInventories"]["data"]
 
-        # Save inventories directly using helpers
+        # Enrich each character with manifest lookups
+        enriched = {}
+        for char_id, char_info in char_data.items():
+            race_hash = char_info.get("raceHash")
+            class_hash = char_info.get("classHash")
+            gender_hash = char_info.get("genderHash")
+            # Manifest lookups
+            race_def = self.manifest_cache.resolve_exact(race_hash, "DestinyRaceDefinition") if race_hash else None
+            class_def = self.manifest_cache.resolve_exact(class_hash, "DestinyClassDefinition") if class_hash else None
+            gender_def = self.manifest_cache.resolve_exact(gender_hash, "DestinyGenderDefinition") if gender_hash else None
+            enriched[char_id] = {
+                "characterId": char_id,
+                "class": class_def["displayProperties"]["name"] if class_def else None,
+                "race": race_def["displayProperties"]["name"] if race_def else None,
+                "gender": gender_def["displayProperties"]["name"] if gender_def else None,
+                "light": char_info.get("light"),
+                "emblem": char_info.get("emblemPath"),
+                "emblemBackground": char_info.get("emblemBackgroundPath"),
+                "level": char_info.get("baseCharacterLevel"),
+                "lastPlayed": char_info.get("dateLastPlayed"),
+                "items": inventory_data.get(char_id, {}).get("items", []),
+            }
+
+        # Save enriched character data to blob
         save_blob(self.storage_conn_str, self.blob_container,
-                  blob_name, json.dumps(inventory_data))
+                  blob_name, json.dumps(enriched))
         logging.info(
-            "Character inventories fetched and saved for user: %s", membership_id)
-        return inventory_data, 200
+            "Character inventories (enriched) fetched and saved for user: %s", membership_id)
+        return enriched, 200
 
     def get_manifest_item(self, item_hash: str | int, definition_type: str = None) -> tuple[dict, int]:
         """
