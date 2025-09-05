@@ -35,9 +35,9 @@ paths:
           application/json:
             schema:
               type: object
-              properties:
-                access_token:
-                  type: string
+              properties: {}
+              additionalProperties:
+                $ref: '#/components/schemas/CharacterModel'
       responses:
         "200":
           description: Assistant initialized
@@ -496,12 +496,14 @@ paths:
             application/json:
               schema:
                 type: object
+                properties: {}
         "400":
           description: Invalid query or agent error
           content:
             application/json:
               schema:
                 type: object
+                properties: {}
 components:
   securitySchemes:
     function_key:
@@ -629,6 +631,7 @@ components:
           format: date-time
     CharacterEquipmentModel:
       type: object
+      properties: {}
       additionalProperties:
         $ref: '#/components/schemas/CharacterModel'
     VaultModel:
