@@ -76,6 +76,8 @@ paths:
     get:
       summary: Get Destiny 2 vault inventory
       operationId: getVaultInventory
+      description: |
+        Returns the user's Destiny 2 vault inventory. If the client sends an `Accept-Encoding: gzip` header or sets the `compress=true` query parameter, the response will be gzip-compressed and include a `Content-Encoding: gzip` header.
       parameters:
         - in: query
           name: limit
@@ -91,15 +93,32 @@ paths:
             type: integer
             minimum: 0
           description: Number of items to skip before starting to return results (pagination)
+        - in: query
+          name: compress
+          required: false
+          schema:
+            type: boolean
+          description: If true, response will be gzip-compressed regardless of Accept-Encoding header
       responses:
         "200":
           description: Vault inventory returned
+          headers:
+            Content-Encoding:
+              description: If present and set to `gzip`, the response body is gzip-compressed.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultModel'
         "500":
           description: Failed to get vault inventory
   /vault/decoded:
     get:
       summary: Decode Destiny 2 vault inventory
       operationId: decodeVaultInventory
+      description: |
+        Returns the decoded Destiny 2 vault inventory. If the client sends an `Accept-Encoding: gzip` header or sets the `compress=true` query parameter, the response will be gzip-compressed and include a `Content-Encoding: gzip` header.
       parameters:
         - in: query
           name: includePerks
@@ -121,15 +140,32 @@ paths:
             type: integer
             minimum: 0
           description: Number of items to skip before starting to return results (pagination)
+        - in: query
+          name: compress
+          required: false
+          schema:
+            type: boolean
+          description: If true, response will be gzip-compressed regardless of Accept-Encoding header
       responses:
         "200":
           description: Decoded vault inventory
+          headers:
+            Content-Encoding:
+              description: If present and set to `gzip`, the response body is gzip-compressed.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultModel'
         "500":
           description: Failed to decode vault
   /characters:
     get:
       summary: Get Destiny 2 character equipment
       operationId: getCharacterEquipment
+      description: |
+        Returns the user's Destiny 2 character equipment. If the client sends an `Accept-Encoding: gzip` header or sets the `compress=true` query parameter, the response will be gzip-compressed and include a `Content-Encoding: gzip` header.
       parameters:
         - in: query
           name: limit
@@ -145,15 +181,32 @@ paths:
             type: integer
             minimum: 0
           description: Number of items to skip before starting to return results per character (pagination)
+        - in: query
+          name: compress
+          required: false
+          schema:
+            type: boolean
+          description: If true, response will be gzip-compressed regardless of Accept-Encoding header
       responses:
         "200":
           description: Character equipment returned
+          headers:
+            Content-Encoding:
+              description: If present and set to `gzip`, the response body is gzip-compressed.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CharacterEquipmentModel'
         "500":
           description: Failed to get character equipment
   /characters/decoded:
     get:
       summary: Decode Destiny 2 character equipment
       operationId: decodeCharacterEquipment
+      description: |
+        Returns the decoded Destiny 2 character equipment. If the client sends an `Accept-Encoding: gzip` header or sets the `compress=true` query parameter, the response will be gzip-compressed and include a `Content-Encoding: gzip` header.
       parameters:
         - in: query
           name: includePerks
@@ -175,9 +228,24 @@ paths:
             type: integer
             minimum: 0
           description: Number of items to skip before starting to return results per character (pagination)
+        - in: query
+          name: compress
+          required: false
+          schema:
+            type: boolean
+          description: If true, response will be gzip-compressed regardless of Accept-Encoding header
       responses:
         "200":
           description: Decoded character equipment
+          headers:
+            Content-Encoding:
+              description: If present and set to `gzip`, the response body is gzip-compressed.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CharacterEquipmentModel'
         "500":
           description: Failed to decode character equipment
   /manifest/item:
@@ -559,6 +627,10 @@ components:
             - string
             - "null"
           format: date-time
+    CharacterEquipmentModel:
+      type: object
+      additionalProperties:
+        $ref: '#/components/schemas/CharacterModel'
     VaultModel:
       type: object
       properties:

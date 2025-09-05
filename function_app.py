@@ -20,6 +20,8 @@ import os
 import platform
 import sys
 import types
+import gzip
+from io import BytesIO
 
 import azure.functions as func
 import psutil
@@ -28,6 +30,32 @@ from vault_assistant import VaultAssistant
 
 app = func.FunctionApp()
 assistant = VaultAssistant()
+
+def compress_response_if_requested(data: str, req: func.HttpRequest, status_code: int = 200) -> func.HttpResponse:
+    """
+    Compresses the response using gzip if the client requests it via Accept-Encoding header or query param.
+    Args:
+        data (str): The response data (JSON string).
+        req (func.HttpRequest): The HTTP request object.
+        status_code (int): HTTP status code.
+    Returns:
+        func.HttpResponse: Compressed or plain response.
+    """
+    accept_encoding = req.headers.get("Accept-Encoding", "")
+    compress_param = req.params.get("compress", "false").lower() == "true"
+    if "gzip" in accept_encoding.lower() or compress_param:
+        buf = BytesIO()
+        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+            gz.write(data.encode("utf-8"))
+        compressed = buf.getvalue()
+        return func.HttpResponse(
+            body=compressed,
+            status_code=status_code,
+            mimetype="application/json",
+            headers={"Content-Encoding": "gzip"}
+        )
+    else:
+        return func.HttpResponse(data, mimetype="application/json", status_code=status_code)
 
 # ----------------------
 # Route Handler Functions
@@ -234,7 +262,8 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
     # Apply pagination
     paged_inventory = inventory[offset:offset+limit] if limit is not None else inventory[offset:]
     logging.info("[vault] Successfully returned vault inventory.")
-    return func.HttpResponse(json.dumps(paged_inventory, indent=2), mimetype="application/json")
+    response_json = json.dumps(paged_inventory, indent=2)
+    return compress_response_if_requested(response_json, req, status_code=status)
 
 
 @app.route(route="characters", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
@@ -270,7 +299,8 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     else:
         paged_equipment = equipment
     logging.info("[characters] Successfully returned character equipment.")
-    return func.HttpResponse(json.dumps(paged_equipment, indent=2), mimetype="application/json")
+    response_json = json.dumps(paged_equipment, indent=2)
+    return compress_response_if_requested(response_json, req, status_code=status)
 
 
 @app.route(route="vault/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
@@ -295,7 +325,8 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
     try:
         result, status = assistant.decode_vault(include_perks=include_perks, limit=limit, offset=offset)
-        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
+        response_json = json.dumps(result, indent=2)
+        return compress_response_if_requested(response_json, req, status_code=status)
     except Exception as e:
         logging.error("[vault/decoded] Failed to decode vault: %s", e)
         return func.HttpResponse("Failed to decode vault.", status_code=500)
@@ -323,7 +354,8 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
     try:
         result, status = assistant.decode_characters(include_perks=include_perks, limit=limit, offset=offset)
-        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
+        response_json = json.dumps(result, indent=2)
+        return compress_response_if_requested(response_json, req, status_code=status)
     except Exception as e:
         logging.error("[characters/decoded] Failed to decode character equipment: %s", e)
         return func.HttpResponse("Failed to decode character equipment.", status_code=500)
