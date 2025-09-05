@@ -454,6 +454,8 @@ class VaultAssistant:
 
         decoded_characters: list[dict] = []
 
+        # pylint: disable=unused-variable
+        # Iterate over characterId, char_data pairs to preserve characterId in output
         for char_id, char_data in raw.items():
             char_items = char_data.get("items", [])
             paged_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
