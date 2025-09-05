@@ -417,7 +417,7 @@ class CharacterModel(BaseModel):
     emblem: str
     emblemBackground: str
     level: int
-    lastPlayed: datetime
+    lastPlayed: str
     items: List[ItemModel] = list()
     data_version: Optional[datetime] = None
 
@@ -441,7 +441,7 @@ class CharacterModel(BaseModel):
         emblem = character_blob.get("emblem") or ""
         emblem_background = character_blob.get("emblemBackground") or ""
         level = character_blob.get("level") or 0
-        last_played = character_blob.get("lastPlayed") or datetime.min
+        last_played = character_blob.get("lastPlayed") or ""
 
         items: List[ItemModel] = []
         for it in items_raw:

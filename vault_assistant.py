@@ -458,9 +458,8 @@ class VaultAssistant:
             char_items = char_data.get("items", [])
             paged_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
 
-            # Build a CharacterModel from the raw items. We don't have per-instance components pre-fetched,
-            # so pass an empty mapping; ItemModel may fetch instance data as needed.
-            char_model = CharacterModel.from_components({"characterId": char_id}, paged_items, {})
+            char_data_no_items = {k: v for k, v in char_data.items() if k != "items"}
+            char_model = CharacterModel.from_components(char_data_no_items, paged_items, {})
 
             # Dump model → dict and (optionally) strip perks
             char_dict = char_model.model_dump()
