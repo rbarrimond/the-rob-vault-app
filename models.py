@@ -1,4 +1,4 @@
-# pylint: disable=line-too-long, broad-exception-caught
+#pylint: disable=line-too-long,too-many-lines, broad-exception-caught
 """
 Models for Destiny 2 vault and character inventory management.
 
@@ -521,6 +521,19 @@ class Character(Base):
     items = relationship("Item", back_populates="character")
     __table_args__ = (Index('IX_Characters_UserId', 'user_id'),)
 
+# --- Vault ORM Model ---
+class Vault(Base):
+    """
+    SQLAlchemy ORM model representing the shared Destiny 2 vault.
+    """
+    __tablename__ = 'Vaults'
+    vault_id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey('Users.user_id'), nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
+    updated_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
+    items = relationship("Item", back_populates="vault")
+
+
 class Item(Base):
     """
     SQLAlchemy ORM model representing an inventory item for a character.
@@ -528,6 +541,7 @@ class Item(Base):
     __tablename__ = 'Items'
     item_id = Column(BigInteger, primary_key=True)
     character_id = Column(BigInteger, ForeignKey('Characters.character_id'))
+    vault_id = Column(BigInteger, ForeignKey('Vaults.vault_id'))
     item_hash = Column(BigInteger, nullable=False)
     item_instance_id = Column(BigInteger)
     name = Column(String(100))
@@ -542,6 +556,7 @@ class Item(Base):
     updated_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
     created_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
     character = relationship("Character", back_populates="items")
+    vault = relationship("Vault", back_populates="items")
     stats = relationship("ItemStat", back_populates="item")
     sockets = relationship("ItemSocket", back_populates="item")
     __table_args__ = (

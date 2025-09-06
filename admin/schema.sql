@@ -12,7 +12,19 @@ IF OBJECT_ID('dbo.ItemEnergy', 'U') IS NOT NULL DROP TABLE dbo.ItemEnergy;
 IF OBJECT_ID('dbo.ItemPlugs', 'U') IS NOT NULL DROP TABLE dbo.ItemPlugs;
 IF OBJECT_ID('dbo.ItemSockets', 'U') IS NOT NULL DROP TABLE dbo.ItemSockets;
 IF OBJECT_ID('dbo.ItemStats', 'U') IS NOT NULL DROP TABLE dbo.ItemStats;
+IF OBJECT_ID('dbo.Vaults', 'U') IS NOT NULL DROP TABLE dbo.Vaults;
 IF OBJECT_ID('dbo.Items', 'U') IS NOT NULL DROP TABLE dbo.Items;
+-- ==========================================================
+-- Vaults
+-- ==========================================================
+CREATE TABLE dbo.Vaults (
+    vault_id     BIGINT        NOT NULL PRIMARY KEY,
+    user_id      BIGINT        NOT NULL,
+    created_at   DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at   DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT FK_Vaults_Users FOREIGN KEY (user_id) REFERENCES dbo.Users(user_id)
+);
+
 IF OBJECT_ID('dbo.Characters', 'U') IS NOT NULL DROP TABLE dbo.Characters;
 IF OBJECT_ID('dbo.Users', 'U') IS NOT NULL DROP TABLE dbo.Users;
 
@@ -47,6 +59,7 @@ CREATE INDEX IX_Characters_UserId ON dbo.Characters(user_id);
 CREATE TABLE dbo.Items (
     item_id           BIGINT        NOT NULL PRIMARY KEY,   -- internal app id (can be same as instance or your own)
     character_id      BIGINT        NULL,                   -- owning character (NULL if in vault)
+    vault_id          BIGINT        NULL,                   -- owning vault (NULL if not in vault)
     item_hash         BIGINT        NOT NULL,               -- definition hash
     item_instance_id  BIGINT        NULL,                   -- Bungie instance id (nullable for non-instanced)
     name              NVARCHAR(100) NULL,
@@ -60,7 +73,8 @@ CREATE TABLE dbo.Items (
     season_hash       BIGINT        NULL,
     updated_at        DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
     created_at        DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
-    CONSTRAINT FK_Items_Characters FOREIGN KEY (character_id) REFERENCES dbo.Characters(character_id)
+    CONSTRAINT FK_Items_Characters FOREIGN KEY (character_id) REFERENCES dbo.Characters(character_id),
+    CONSTRAINT FK_Items_Vaults FOREIGN KEY (vault_id) REFERENCES dbo.Vaults(vault_id)
 );
 CREATE INDEX IX_Items_Character_Equipped ON dbo.Items(character_id, is_equipped);
 CREATE INDEX IX_Items_ItemHash            ON dbo.Items(item_hash);
