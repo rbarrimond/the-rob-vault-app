@@ -324,8 +324,7 @@ class VaultAssistant:
         # Save enriched character data to blob
         save_blob(self.storage_conn_str, self.blob_container,
                   blob_name, json.dumps(enriched))
-        logging.info(
-            "Character inventories (enriched) fetched and saved for user: %s", membership_id)
+        logging.info("Character inventories (enriched) fetched and saved for user: %s", membership_id)
         return enriched, 200
 
     def get_manifest_item(self, item_hash: str | int, definition_type: str = None) -> tuple[dict, int]:
@@ -425,6 +424,8 @@ class VaultAssistant:
             if include_perks and hasattr(item, "perks"):
                 decoded["perks"] = item.perks
             decoded_items.append(decoded)
+
+        save_blob(self.storage_conn_str, self.blob_container, f"{membership_id}-vault-decoded.json", json.dumps(decoded_items))
         return decoded_items, 200
 
     def decode_characters(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
@@ -475,6 +476,7 @@ class VaultAssistant:
             char_dict["items"] = cleaned_items
             decoded_characters.append(char_dict)
 
+        save_blob(self.storage_conn_str, self.blob_container, f"{membership_id}-characters-decoded.json", json.dumps(decoded_characters))
         return decoded_characters, 200
 
     def get_session_token(self) -> tuple[dict, int]:
