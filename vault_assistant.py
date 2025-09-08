@@ -337,7 +337,6 @@ class VaultAssistant:
         Returns:
             tuple: (definition dict, status_code)
         """
-        self.manifest_cache.ensure_manifest()
         if definition_type:
             definition = self.manifest_cache.get_definitions(definition_type, item_hash)
             if definition:

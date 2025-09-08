@@ -5,6 +5,7 @@ ManifestCache module for Destiny 2 manifest management.
 Encapsulates manifest data loading, saving, and lookup logic for Destiny 2 manifest SQLite database.
 Provides thread-safe singleton access, manifest download/update, and fast lookup methods for definitions.
 """
+import ctypes
 import json
 import logging
 import os
@@ -12,13 +13,13 @@ import sqlite3
 import tempfile
 import threading
 import zipfile
-import ctypes
+from collections import defaultdict
 
 import requests
 
+from constants import (BUNGIE_API_BASE, BUNGIE_REQUIRED_DEFS, DEFAULT_HEADERS,
+                       REQUEST_TIMEOUT)
 from helpers import normalize_item_hash, retry_request
-from constants import BUNGIE_REQUIRED_DEFS, BUNGIE_API_BASE, REQUEST_TIMEOUT, DEFAULT_HEADERS
-from collections import defaultdict
 
 
 class ManifestCache:
