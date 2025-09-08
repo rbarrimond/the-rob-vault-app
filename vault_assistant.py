@@ -19,10 +19,8 @@ import requests
 from azure.storage.blob import BlobServiceClient
 
 from bungie_session_manager import BungieSessionManager
-from helpers import (
-    normalize_item_hash, blob_exists, get_blob_last_modified,
-    retry_request, load_blob, save_blob, save_dim_backup_blob
-)
+from helpers import (blob_exists, get_blob_last_modified,
+    retry_request, load_blob, save_blob, save_dim_backup_blob)
 from manifest_cache import ManifestCache
 from constants import BUNGIE_REQUIRED_DEFS, CLASS_TYPE_MAP
 from constants import (
@@ -508,54 +506,6 @@ class VaultAssistant:
             "access_token": session["access_token"],
             "membership_id": session["membership_id"]
         }, 200
-
-    def _get_blob_container(self) -> BlobServiceClient:
-        """
-        Return the blob container client for the main blob container.
-
-        Returns:
-            BlobServiceClient: The blob container client.
-        """
-        return BlobServiceClient.from_connection_string(self.storage_conn_str).get_container_client(self.blob_container)
-
-    def _get_manifest_definitions(self) -> dict:
-        """
-        Fetch and return all required manifest definitions as a dict of dicts.
-
-        Returns:
-            dict: {definition_type: {item_hash: definition_dict}}
-        """
-        self.manifest_cache.ensure_manifest()
-        definitions = {}
-        for def_type in BUNGIE_REQUIRED_DEFS:
-            defs = self.manifest_cache.get_definitions(def_type)
-            definitions[def_type] = defs if defs else {}
-        return definitions
-
-    def _extract_perks(self, defn):
-        """
-        Extract perks from an item definition.
-
-        Args:
-            defn (dict): Item manifest definition.
-
-        Returns:
-            list: List of perks dicts.
-        """
-        perks = []
-        for socket in defn.get("sockets", {}).get("socketEntries", []):
-            plug_hash = socket.get("singleInitialItemHash")
-            if plug_hash:
-                norm_plug_hash = normalize_item_hash(plug_hash)
-                plug_def, _ = self.manifest_cache.resolve_manifest_hash(norm_plug_hash)
-                if plug_def:
-                    perks.append({
-                        "name": plug_def.get("displayProperties", {}).get("name", "Unknown"),
-                        "description": plug_def.get("displayProperties", {}).get("description", ""),
-                        "icon": plug_def.get("displayProperties", {}).get("icon", None),
-                        "plugItemHash": plug_hash
-                    })
-        return perks
 
     def save_object(self, mime_object) -> tuple[dict, int]:
         """
