@@ -43,14 +43,18 @@ CREATE TABLE dbo.Users (
 -- Characters
 -- ==========================================================
 CREATE TABLE dbo.Characters (
-    character_id BIGINT        NOT NULL PRIMARY KEY,
-    user_id      BIGINT        NOT NULL,
-    class_type   NVARCHAR(50)  NULL,  -- Titan/Hunter/Warlock (label)
-    light        INT           NULL,  -- power level
-    race_hash    BIGINT        NULL,
-    created_at   DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
+    character_id            BIGINT        NOT NULL PRIMARY KEY,
+    user_id                 BIGINT        NOT NULL,
+    class_type              NVARCHAR(50)  NULL,  -- Titan/Hunter/Warlock (label)
+    light                   INT           NULL,  -- power level
+    race_hash               BIGINT        NULL,
+    artifact_item_hash      BIGINT        NULL,  -- seasonal artifact definition hash (profile-wide; stored per character for convenience)
+    artifact_power_bonus    INT           NULL,  -- seasonal artifact power bonus applied to character
+    artifact_updated_at     DATETIME2     NULL,  -- last time we saw/updated artifact info
+    created_at              DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT FK_Characters_Users FOREIGN KEY (user_id) REFERENCES dbo.Users(user_id)
 );
+CREATE INDEX IX_Characters_ArtifactHash ON dbo.Characters(artifact_item_hash);
 CREATE INDEX IX_Characters_UserId ON dbo.Characters(user_id);
 
 -- ==========================================================
