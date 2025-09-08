@@ -19,7 +19,7 @@ import requests
 from azure.storage.blob import BlobServiceClient
 
 from bungie_session_manager import BungieSessionManager
-from helpers import (blob_exists, get_blob_last_modified, load_blob_if_modified_before,
+from helpers import (blob_exists, get_blob_last_modified, load_blob_if_stale,
     retry_request, load_blob, save_blob, save_dim_backup_blob)
 from manifest_cache import ManifestCache
 from constants import BUNGIE_REQUIRED_DEFS, CLASS_TYPE_MAP
@@ -421,7 +421,7 @@ class VaultAssistant:
         decoded_blob_name = f"{membership_id}-vault-decoded.json"
         date_last_played = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)[0]
         if date_last_played:
-            blob_data = load_blob_if_modified_before(self.storage_conn_str, self.blob_container, decoded_blob_name, date_last_played)
+            blob_data = load_blob_if_stale(self.storage_conn_str, self.blob_container, decoded_blob_name, date_last_played)
             if blob_data:
                 logging.info("Using cached decoded vault from blob for user: %s", membership_id)
                 decoded_items = json.loads(blob_data)
@@ -478,7 +478,7 @@ class VaultAssistant:
         decoded_blob_name = f"{membership_id}-characters-decoded.json"
         date_last_played = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)[0]
         if date_last_played:
-            blob_data = load_blob_if_modified_before(self.storage_conn_str, self.blob_container, decoded_blob_name, date_last_played)
+            blob_data = load_blob_if_stale(self.storage_conn_str, self.blob_container, decoded_blob_name, date_last_played)
             if blob_data is not None:
                 logging.info("Using cached decoded characters from blob for user: %s", membership_id)
                 decoded_characters = json.loads(blob_data)
