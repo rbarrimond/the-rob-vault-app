@@ -41,7 +41,8 @@ class VaultAssistant:
 
     This class manages Destiny 2 API interactions, manifest lookups, backup operations, and delegates
     session/authentication logic to BungieSessionManager. Integrates with Azure services for
-    secure storage and scalable operations.
+    secure storage and scalable operations. It supports decoding and persisting Destiny 2 vault and character data
+    using VaultModel and CharacterModel, and can persist decoded vaults to a relational database via ORM models.
     """
 
     def __init__(
@@ -399,6 +400,10 @@ class VaultAssistant:
         """
         Decode the vault inventory using VaultModel.from_components for each item. Optionally include perks. Supports pagination.
 
+        This method loads the user's vault inventory from blob storage, decodes it using VaultModel,
+        and returns a list of enriched item dicts. If requested, perks are included. Supports offset/limit for pagination.
+        The decoded vault can be persisted to a database using the ORM Vault and Item models.
+
         Args:
             include_perks (bool): If True, include perks for each item.
             limit (int): Max number of items to return.
@@ -425,12 +430,20 @@ class VaultAssistant:
                 decoded["perks"] = item.perks
             decoded_items.append(decoded)
 
-        save_blob(self.storage_conn_str, self.blob_container, f"{membership_id}-vault-decoded.json", json.dumps(decoded_items))
+        if limit is None and offset == 0:
+            # Only save if we are returning the full set or a positive slice from the start
+            # (to avoid saving partial slices)
+            save_blob(self.storage_conn_str, self.blob_container, 
+                      f"{membership_id}-vault-decoded.json", json.dumps(decoded_items))
         return decoded_items, 200
 
     def decode_characters(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
         """
         Decode the character equipment using CharacterModel.from_components for each character. Optionally include perks. Supports pagination.
+
+        This method loads the user's character inventories from blob storage, decodes each character using CharacterModel,
+        and returns a list of enriched character dicts. Each character's items are paginated and optionally include perks.
+        Decoded character inventories can be persisted to a database using the ORM Character and Item models.
 
         Args:
             include_perks (bool): If True, include perks for each item.
@@ -476,7 +489,11 @@ class VaultAssistant:
             char_dict["items"] = cleaned_items
             decoded_characters.append(char_dict)
 
-        save_blob(self.storage_conn_str, self.blob_container, f"{membership_id}-characters-decoded.json", json.dumps(decoded_characters))
+        if limit is None and offset == 0:
+            # Only save if we are returning the full set or a positive slice from the start
+            # (to avoid saving partial slices)
+            save_blob(self.storage_conn_str, self.blob_container, 
+                      f"{membership_id}-characters-decoded.json", json.dumps(decoded_characters))
         return decoded_characters, 200
 
     def get_session_token(self) -> tuple[dict, int]:
@@ -514,160 +531,6 @@ class VaultAssistant:
             defs = self.manifest_cache.get_definitions(def_type)
             definitions[def_type] = defs if defs else {}
         return definitions
-
-    def _decode_blob(self, source: str = 'vault', include_perks: bool = False, limit: int = None, offset: int = 0) -> list:
-        """
-        Decode and enrich inventory or character data using manifest definitions. Supports pagination.
-
-        Args:
-            source (str): 'vault' or 'characters'.
-            include_perks (bool): If True, include perks for each item.
-            limit (int): Max number of items to return.
-            offset (int): Number of items to skip.
-
-        Returns:
-            list: Decoded items.
-        """
-        logging.info("Starting decode pass for source: %s", source)
-        session = self.get_session()
-        membership_id = session["membership_id"]
-        blob_name = f"{membership_id}.json" if source == "vault" else f"{membership_id}-characters.json"
-        container = self._get_blob_container()
-        blob_data = container.download_blob(blob_name).readall()
-        items = json.loads(blob_data)
-        definitions = self._get_manifest_definitions()
-        decoded_items = []
-        if source == "vault":
-            # Vault: flat list of items
-            if isinstance(items, list):
-                paged_items = items[offset:offset + limit] if limit is not None else items[offset:]
-                for item in paged_items:
-                    # If already decoded, just append
-                    if "name" in item and "type" in item:
-                        decoded_items.append(item)
-                        continue
-                    item_hash = normalize_item_hash(item.get("itemHash"))
-                    defn = None
-                    for def_type in BUNGIE_REQUIRED_DEFS:
-                        def_dict = definitions.get(def_type, {})
-                        defn = def_dict.get(item_hash)
-                        if defn:
-                            break
-                    if defn is None:
-                        logging.warning(
-                            "Item hash %s not found in manifest definitions.", item_hash)
-                        decoded = {
-                            "name": "Unknown",
-                            "type": "Unknown",
-                            "itemHash": item.get("itemHash"),
-                            "itemInstanceId": item.get("itemInstanceId"),
-                            "manifestMissing": True
-                        }
-                    else:
-                        decoded = {
-                            "name": defn.get("displayProperties", {}).get("name", "Unknown"),
-                            "type": defn.get("itemTypeDisplayName", "Unknown"),
-                            "itemHash": item.get("itemHash"),
-                            "itemInstanceId": item.get("itemInstanceId"),
-                        }
-                        if include_perks:
-                            decoded["perks"] = self._extract_perks(defn)
-                    decoded_items.append(decoded)
-        elif source == "characters":
-            # Characters: dict of characterId: {items: [...]}
-            if isinstance(items, dict):
-                for char_id, char_data in items.items():
-                    char_items = char_data.get("items", [])
-                    paged_char_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
-                    enriched_items = []
-                    for item in paged_char_items:
-                        # If already decoded, just append
-                        if "name" in item and "type" in item:
-                            enriched_items.append(item)
-                            continue
-                        item_hash = normalize_item_hash(item.get("itemHash"))
-                        defn = None
-                        for def_type in BUNGIE_REQUIRED_DEFS:
-                            def_dict = definitions.get(def_type, {})
-                            defn = def_dict.get(item_hash)
-                            if defn:
-                                break
-                        if defn is None:
-                            logging.warning(
-                                "Item hash %s not found in manifest definitions.", item_hash)
-                            decoded = {
-                                "name": "Unknown",
-                                "type": "Unknown",
-                                "itemHash": item.get("itemHash"),
-                                "itemInstanceId": item.get("itemInstanceId"),
-                                "manifestMissing": True
-                            }
-                        else:
-                            # Defensive: handle missing displayProperties
-                            display_props = defn.get("displayProperties")
-                            if display_props and isinstance(display_props, dict):
-                                name = display_props.get("name", "Unknown")
-                            else:
-                                name = defn.get("itemName") or defn.get("title") or str(item.get("itemHash"))
-                            type_val = defn.get("itemTypeDisplayName") or defn.get("itemType") or "Unknown"
-                            decoded = {
-                                "name": name,
-                                "type": type_val,
-                                "itemHash": item.get("itemHash"),
-                                "itemInstanceId": item.get("itemInstanceId"),
-                            }
-                            if include_perks:
-                                decoded["perks"] = self._extract_perks(defn)
-                        enriched_items.append(decoded)
-                    decoded_items.append({
-                        "characterId": char_id,
-                        "items": enriched_items
-                    })
-            elif isinstance(items, list):
-                # New format: list of {characterId, items}
-                for char_obj in items:
-                    char_id = char_obj.get("characterId")
-                    char_items = char_obj.get("items", [])
-                    paged_char_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
-                    enriched_items = []
-                    for item in paged_char_items:
-                        # If already decoded, just append
-                        if "name" in item and "type" in item:
-                            enriched_items.append(item)
-                            continue
-                        item_hash = normalize_item_hash(item.get("itemHash"))
-                        defn = None
-                        for def_type in BUNGIE_REQUIRED_DEFS:
-                            def_dict = definitions.get(def_type, {})
-                            defn = def_dict.get(item_hash)
-                            if defn:
-                                break
-                        if defn is None:
-                            logging.warning(
-                                "Item hash %s not found in manifest definitions.", item_hash)
-                            decoded = {
-                                "name": "Unknown",
-                                "type": "Unknown",
-                                "itemHash": item.get("itemHash"),
-                                "itemInstanceId": item.get("itemInstanceId"),
-                                "manifestMissing": True
-                            }
-                        else:
-                            decoded = {
-                                "name": defn.get("displayProperties", {}).get("name", "Unknown"),
-                                "type": defn.get("itemTypeDisplayName", "Unknown"),
-                                "itemHash": item.get("itemHash"),
-                                "itemInstanceId": item.get("itemInstanceId"),
-                            }
-                            if include_perks:
-                                decoded["perks"] = self._extract_perks(defn)
-                        enriched_items.append(decoded)
-                    decoded_items.append({
-                        "characterId": char_id,
-                        "items": enriched_items
-                    })
-        logging.info("Decode pass complete for source: %s", source)
-        return decoded_items
 
     def _extract_perks(self, defn):
         """
