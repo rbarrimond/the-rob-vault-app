@@ -173,19 +173,19 @@ def get_blob_last_modified(connection_string: str, container_name: str, blob_nam
     return None
 
 
-def load_blob_if_modified_before(blob, modified_date: datetime | str, input_date: datetime | str) -> Optional[bytes]:
+def load_blob_if_modified_before(connection_string: str, container_name: str, blob_name: str, input_date: datetime | str) -> Optional[bytes]:
     """
     Returns the blob if its modified_date is before input_date, otherwise returns None.
     Both dates can be datetime objects or ISO format strings.
     """
-    if isinstance(modified_date, str):
-        modified_date = datetime.fromisoformat(modified_date)
+    modified_date = get_blob_last_modified(connection_string, container_name, blob_name)
+    if not modified_date:
+        return None
     if isinstance(input_date, str):
         input_date = datetime.fromisoformat(input_date)
     if modified_date < input_date:
-        return blob
+        return load_blob(connection_string, container_name, blob_name)
     return None
-
 
 def save_table_entity(connection_string: str, table_name: str, entity: dict) -> None:
     """

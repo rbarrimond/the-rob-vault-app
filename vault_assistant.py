@@ -421,12 +421,8 @@ class VaultAssistant:
         decoded_blob_name = f"{membership_id}-vault-decoded.json"
         date_last_played = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)[0]
         if date_last_played:
-            blob_data = load_blob_if_modified_before(
-                load_blob(self.storage_conn_str, self.blob_container, decoded_blob_name),
-                get_blob_last_modified(self.storage_conn_str, self.blob_container, decoded_blob_name),
-                date_last_played
-            )
-            if blob_data is not None:
+            blob_data = load_blob_if_modified_before(self.storage_conn_str, self.blob_container, decoded_blob_name, date_last_played)
+            if blob_data:
                 logging.info("Using cached decoded vault from blob for user: %s", membership_id)
                 decoded_items = json.loads(blob_data)
                 paged_items = decoded_items[offset:offset + limit] if limit is not None else decoded_items[offset:]
@@ -473,6 +469,22 @@ class VaultAssistant:
         """
         session = self.get_session()
         membership_id = session["membership_id"]
+        membership_type = session["membership_type"]
+        headers = {
+            "Authorization": f"Bearer {session['access_token']}",
+            "X-API-Key": self.api_key
+            }
+
+        decoded_blob_name = f"{membership_id}-characters-decoded.json"
+        date_last_played = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)[0]
+        if date_last_played:
+            blob_data = load_blob_if_modified_before(self.storage_conn_str, self.blob_container, decoded_blob_name, date_last_played)
+            if blob_data is not None:
+                logging.info("Using cached decoded characters from blob for user: %s", membership_id)
+                decoded_characters = json.loads(blob_data)
+                return decoded_characters, 200
+
+        logging.info("Decoding character inventories for user: %s", membership_id)
         blob_name = f"{membership_id}-characters.json"
         blob_data = load_blob(self.storage_conn_str, self.blob_container, blob_name)
         if blob_data is None:
@@ -485,33 +497,23 @@ class VaultAssistant:
             return [], 400
 
         decoded_characters: list[dict] = []
-
-        # pylint: disable=unused-variable
-        # Iterate over characterId, char_data pairs to preserve characterId in output
         for char_id, char_data in raw.items():
             char_items = char_data.get("items", [])
             paged_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
-
             char_data_no_items = {k: v for k, v in char_data.items() if k != "items"}
             char_model = CharacterModel.from_components(char_data_no_items, paged_items, {})
-
-            # Dump model → dict and (optionally) strip perks
             char_dict = char_model.model_dump()
             cleaned_items: list[dict] = []
             for it in char_model.items:
                 it_dict = it.model_dump()
                 if not include_perks and "perks" in it_dict:
-                    # Remove perks unless explicitly requested
                     it_dict.pop("perks", None)
                 cleaned_items.append(it_dict)
             char_dict["items"] = cleaned_items
             decoded_characters.append(char_dict)
 
         if limit is None and offset == 0:
-            # Only save if we are returning the full set or a positive slice from the start
-            # (to avoid saving partial slices)
-            save_blob(self.storage_conn_str, self.blob_container, 
-                      f"{membership_id}-characters-decoded.json", json.dumps(decoded_characters))
+            save_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, json.dumps(decoded_characters))
         return decoded_characters, 200
 
     def get_session_token(self) -> tuple[dict, int]:
