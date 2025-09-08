@@ -338,13 +338,13 @@ class VaultAssistant:
             tuple: (definition dict, status_code)
         """
         if definition_type:
-            definition = self.manifest_cache.get_definitions(definition_type, item_hash)
+            definition = self.manifest_cache.resolve_exact(item_hash, definition_type)
             if definition:
                 return definition, 200
             return None, 404
         # If no type specified, search all required types
         for def_type in BUNGIE_REQUIRED_DEFS:
-            definition = self.manifest_cache.get_definitions(def_type, item_hash)
+            definition = self.manifest_cache.resolve_exact(item_hash, def_type)
             if definition:
                 return definition, 200
         return None, 404
