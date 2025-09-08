@@ -406,6 +406,7 @@ class CharacterModel(BaseModel):
         name (str): Character name.
         classType (str): Class type (Hunter, Titan, Warlock).
         items (List[ItemModel]): List of items for this character.
+        artifact (Optional[ItemModel]): Optional seasonal artifact for this character/profile.
         data_version (Optional[datetime]): Bungie dateLastPlayed as datetime for freshness/version.
     """
     charId: str
@@ -419,6 +420,7 @@ class CharacterModel(BaseModel):
     level: int
     lastPlayed: str
     items: List[ItemModel] = list()
+    artifact: Optional[ItemModel] = None
     data_version: Optional[datetime] = None
 
     @classmethod
@@ -427,6 +429,7 @@ class CharacterModel(BaseModel):
         character_blob: dict,
         items_raw: List[dict],
         components_by_instance: Dict[str, dict],
+        artifact_raw: Optional[dict] = None,
     ) -> "CharacterModel":
         """
         Build a CharacterModel from a character blob, raw items, and a mapping of instanceId->components (300/302/304/305).
@@ -448,6 +451,18 @@ class CharacterModel(BaseModel):
             iid = it.get("itemInstanceId")
             comps = components_by_instance.get(str(iid)) if iid else None
             items.append(ItemModel.from_components(it, components=comps))
+
+        artifact_model: Optional[ItemModel] = None
+        if artifact_raw and artifact_raw.get("itemHash") is not None:
+            # Build from manifest; artifacts typically lack instance data
+            artifact_model = ItemModel.from_components({"itemHash": artifact_raw.get("itemHash")}, components=None)
+            # Optionally attach power bonus metadata if present
+            power_bonus = artifact_raw.get("powerBonus")
+            if power_bonus is not None:
+                if artifact_model.perks is None:
+                    artifact_model.perks = {}
+                artifact_model.perks.setdefault("artifactInfo", []).append({"powerBonus": power_bonus})
+
         return cls(
             charId=char_id,
             name=name,
@@ -459,7 +474,8 @@ class CharacterModel(BaseModel):
             emblemBackground=emblem_background,
             level=level,
             lastPlayed=last_played,
-            items=items
+            items=items,
+            artifact=artifact_model
         )
 
 class VaultModel(BaseModel):

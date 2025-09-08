@@ -288,7 +288,7 @@ class VaultAssistant:
             return inventory_data, 200
 
         # Otherwise, fetch fresh character summary and inventory, then enrich
-        char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=200,201"
+        char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=200,201,900"
         char_resp = retry_request(
             requests.get, char_url, headers=headers, timeout=self.timeout)
         if not char_resp.ok:
@@ -297,6 +297,12 @@ class VaultAssistant:
         resp_json = char_resp.json()["Response"]
         char_data = resp_json["characters"]["data"]
         inventory_data = resp_json["characterInventories"]["data"]
+
+        # Extract seasonal artifact info from profileProgression
+        profile_prog = resp_json.get("profileProgression", {}).get("data", {}) or {}
+        seasonal_artifact = profile_prog.get("seasonalArtifact", {}) or {}
+        artifact_hash = seasonal_artifact.get("artifactItemHash")
+        artifact_power_bonus = seasonal_artifact.get("powerBonus")
 
         # Enrich each character with manifest lookups
         enriched = {}
@@ -320,10 +326,15 @@ class VaultAssistant:
                 "lastPlayed": char_info.get("dateLastPlayed"),
                 "items": inventory_data.get(char_id, {}).get("items", []),
             }
+            # Attach seasonal artifact (profile-wide) to each character record for convenience
+            if artifact_hash is not None:
+                enriched[char_id]["artifact"] = {
+                    "itemHash": artifact_hash,
+                    "powerBonus": artifact_power_bonus,
+                }
 
         # Save enriched character data to blob
-        save_blob(self.storage_conn_str, self.blob_container,
-                  blob_name, json.dumps(enriched))
+        save_blob(self.storage_conn_str, self.blob_container, blob_name, json.dumps(enriched))
         logging.info("Character inventories (enriched) fetched and saved for user: %s", membership_id)
         return enriched, 200
 
@@ -443,7 +454,7 @@ class VaultAssistant:
             decoded = item.model_dump()
             if include_perks and hasattr(item, "perks"):
                 decoded["perks"] = item.perks
-        decoded_items.append(decoded)
+            decoded_items.append(decoded)
 
         if limit is None and offset == 0:
             # Only save if we are returning the full set or a positive slice from the start
@@ -501,7 +512,8 @@ class VaultAssistant:
             char_items = char_data.get("items", [])
             paged_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
             char_data_no_items = {k: v for k, v in char_data.items() if k != "items"}
-            char_model = CharacterModel.from_components(char_data_no_items, paged_items, {})
+            artifact_raw = char_data.get("artifact") if isinstance(char_data.get("artifact"), dict) else None
+            char_model = CharacterModel.from_components(char_data_no_items, paged_items, {}, artifact_raw=artifact_raw)
             char_dict = char_model.model_dump()
             cleaned_items: list[dict] = []
             for it in char_model.items:
