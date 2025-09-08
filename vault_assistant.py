@@ -19,7 +19,7 @@ import requests
 from azure.storage.blob import BlobServiceClient
 
 from bungie_session_manager import BungieSessionManager
-from helpers import (blob_exists, get_blob_last_modified,
+from helpers import (blob_exists, get_blob_last_modified, load_blob_if_modified_before,
     retry_request, load_blob, save_blob, save_dim_backup_blob)
 from manifest_cache import ManifestCache
 from constants import BUNGIE_REQUIRED_DEFS, CLASS_TYPE_MAP
@@ -157,6 +157,33 @@ class VaultAssistant:
             "manifestReady": manifest_ready
         }, 200
 
+    def get_bungie_profile_last_modified(self, membership_id: str, membership_type: str, headers: dict) -> tuple[datetime | None, int]:
+        """
+        Helper to fetch Bungie profile last modified date as datetime.
+        Args:
+            membership_id (str): Destiny 2 membership ID.
+            membership_type (str): Destiny 2 membership type.
+            headers (dict): Headers to include in the request.
+
+        Returns:
+            (datetime or None, status_code)
+        """
+        get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
+        profile_detail_resp = retry_request(requests.get, get_profile_url, headers=headers, timeout=self.timeout)
+        if not profile_detail_resp.ok:
+            logging.error("Failed to get profile details: status %d", profile_detail_resp.status_code)
+            return None, profile_detail_resp.status_code
+        profile_detail = profile_detail_resp.json()["Response"]["profile"]["data"]
+        bungie_last_modified = profile_detail.get("dateLastPlayed") or profile_detail.get("lastModified")
+        if bungie_last_modified:
+            try:
+                bungie_last_modified_dt = datetime.strptime(bungie_last_modified, "%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                bungie_last_modified_dt = None
+        else:
+            bungie_last_modified_dt = None
+        return bungie_last_modified_dt, 200
+
     def process_query(self, query: dict) -> dict:
         """
         Process a query using the Vault Sentinel DB Agent.
@@ -192,24 +219,10 @@ class VaultAssistant:
             "Authorization": f"Bearer {access_token}",
             "X-API-Key": self.api_key
         }
-        # Get Bungie profile lastModified
-        get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
-        profile_detail_resp = retry_request(
-            requests.get, get_profile_url, headers=headers, timeout=self.timeout)
-        if not profile_detail_resp.ok:
-            logging.error("Failed to get profile details: status %d",
-                          profile_detail_resp.status_code)
-            return None, profile_detail_resp.status_code
-        profile_detail = profile_detail_resp.json()["Response"]["profile"]["data"]
-        bungie_last_modified = profile_detail.get("dateLastPlayed") or profile_detail.get("lastModified")
-        if bungie_last_modified:
-            try:
-                bungie_last_modified_dt = datetime.strptime(
-                    bungie_last_modified, "%Y-%m-%dT%H:%M:%SZ")
-            except Exception:
-                bungie_last_modified_dt = None
-        else:
-            bungie_last_modified_dt = None
+        # Get Bungie profile lastModified using helper
+        bungie_last_modified_dt, status = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)
+        if status != 200:
+            return None, status
 
         # Get blob last modified using helpers
         blob_name = f"{membership_id}.json"
@@ -257,22 +270,10 @@ class VaultAssistant:
             logging.error("No Destiny memberships found for user.")
             return None, 404
 
-        # Get Bungie profile lastModified
-        get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
-        profile_detail_resp = retry_request(requests.get, get_profile_url, headers=headers, timeout=self.timeout)
-        if not profile_detail_resp.ok:
-            logging.error("Failed to get profile details: status %d",
-                          profile_detail_resp.status_code)
-            return None, profile_detail_resp.status_code
-        profile_detail = profile_detail_resp.json()["Response"]["profile"]["data"]
-        bungie_last_modified = profile_detail.get("dateLastPlayed") or profile_detail.get("lastModified")
-        if bungie_last_modified:
-            try:
-                bungie_last_modified_dt = datetime.strptime(bungie_last_modified, "%Y-%m-%dT%H:%M:%SZ")
-            except Exception:
-                bungie_last_modified_dt = None
-        else:
-            bungie_last_modified_dt = None
+        # Get Bungie profile lastModified using helper
+        bungie_last_modified_dt, status = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)
+        if status != 200:
+            return None, status
 
         # Get blob last modified using helpers
         blob_name = f"{membership_id}-characters.json"
@@ -411,6 +412,27 @@ class VaultAssistant:
         """
         session = self.get_session()
         membership_id = session["membership_id"]
+        membership_type = session["membership_type"]
+        headers = {
+            "Authorization": f"Bearer {session['access_token']}",
+            "X-API-Key": self.api_key
+            }
+
+        decoded_blob_name = f"{membership_id}-vault-decoded.json"
+        date_last_played = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)[0]
+        if date_last_played:
+            blob_data = load_blob_if_modified_before(
+                load_blob(self.storage_conn_str, self.blob_container, decoded_blob_name),
+                get_blob_last_modified(self.storage_conn_str, self.blob_container, decoded_blob_name),
+                date_last_played
+            )
+            if blob_data is not None:
+                logging.info("Using cached decoded vault from blob for user: %s", membership_id)
+                decoded_items = json.loads(blob_data)
+                paged_items = decoded_items[offset:offset + limit] if limit is not None else decoded_items[offset:]
+                return paged_items, 200
+
+        logging.info("Decoding vault inventory for user: %s", membership_id)
         blob_name = f"{membership_id}.json"
         blob_data = load_blob(self.storage_conn_str, self.blob_container, blob_name)
         if blob_data is None:
@@ -425,15 +447,14 @@ class VaultAssistant:
             decoded = item.model_dump()
             if include_perks and hasattr(item, "perks"):
                 decoded["perks"] = item.perks
-            decoded_items.append(decoded)
+        decoded_items.append(decoded)
 
         if limit is None and offset == 0:
             # Only save if we are returning the full set or a positive slice from the start
             # (to avoid saving partial slices)
-            save_blob(self.storage_conn_str, self.blob_container, 
-                      f"{membership_id}-vault-decoded.json", json.dumps(decoded_items))
+            save_blob(self.storage_conn_str, self.blob_container,
+                    decoded_blob_name, json.dumps(decoded_items))
         return decoded_items, 200
-
     def decode_characters(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
         """
         Decode the character equipment using CharacterModel.from_components for each character. Optionally include perks. Supports pagination.

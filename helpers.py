@@ -13,8 +13,9 @@ This module provides:
 import time
 import logging
 import hashlib
-import datetime
+from datetime import datetime
 import ctypes
+from typing import Optional
 
 import requests
 
@@ -151,7 +152,7 @@ def blob_exists(connection_string: str, container_name: str, blob_name: str) -> 
     blob_client = container.get_blob_client(blob_name)
     return blob_client.exists()
 
-def get_blob_last_modified(connection_string: str, container_name: str, blob_name: str):
+def get_blob_last_modified(connection_string: str, container_name: str, blob_name: str) -> Optional[datetime]:
     """
     Get the last modified datetime of a blob in Azure Blob Storage.
 
@@ -170,6 +171,21 @@ def get_blob_last_modified(connection_string: str, container_name: str, blob_nam
         props = blob_client.get_blob_properties()
         return props.last_modified.replace(tzinfo=None)
     return None
+
+
+def load_blob_if_modified_before(blob, modified_date: datetime | str, input_date: datetime | str) -> Optional[bytes]:
+    """
+    Returns the blob if its modified_date is before input_date, otherwise returns None.
+    Both dates can be datetime objects or ISO format strings.
+    """
+    if isinstance(modified_date, str):
+        modified_date = datetime.fromisoformat(modified_date)
+    if isinstance(input_date, str):
+        input_date = datetime.fromisoformat(input_date)
+    if modified_date < input_date:
+        return blob
+    return None
+
 
 def save_table_entity(connection_string: str, table_name: str, entity: dict) -> None:
     """
