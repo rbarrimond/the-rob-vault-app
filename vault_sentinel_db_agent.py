@@ -108,12 +108,17 @@ class VaultSentinelDBAgent:
     def process_query(self, query: Dict[str, Any]) -> Dict[str, Any]:
         """
         Main business logic for processing Destiny 2 gear queries.
-        This method is wired to Azure OpenAI and Azure SQL DB.
+        Uses AI to generate SQL, executes it via SQLAlchemy, and returns results.
         """
         if not self.validate_query(query):
             raise ValueError("Query does not conform to schema.")
         logging.info("Processing query: %s", query["intent"])
 
+        if not self.Session:
+            logging.error("SQLAlchemy sessionmaker not initialized.")
+            return {"status": "error", "error": "Sessionmaker not initialized"}
+
+        # Get instructions for the AI
         with open("db-agent-instructions.md", "r", encoding="utf-8") as f:
             instructions = f.read()
 
@@ -121,24 +126,32 @@ class VaultSentinelDBAgent:
             "role": "system",
             "content": instructions
         }
-
         user_message = {
             "role": "user",
-            "content": json.dumps(query, indent=2)  # Ensure query is formatted as JSON
+            "content": json.dumps(query, indent=2)
         }
 
         try:
             response = self.chat_client.chat.completions.create(
                 messages=[system_message, user_message],
-                temperature=0.0,  # Adjust temperature for response variability
-                frequency_penalty=0.0,  # No penalty for repeated tokens
-                presence_penalty=-2.0  # Max penalty for new topics
+                temperature=0.0,
+                frequency_penalty=0.0,
+                presence_penalty=-2.0
             )
-            
-            chat_content = response.choices[0].message.content if response.choices else ""
-            return {"status": "success", "data": chat_content}
+            sql_query = response.choices[0].message.content.strip() if response.choices else ""
+            logging.info("AI-generated SQL: %s", sql_query)
+            if not sql_query.lower().startswith("select"):
+                logging.error("AI did not return a SELECT query.")
+                return {"status": "error", "error": "AI did not return a SELECT query."}
+
+            session = self.Session()
+            result = session.execute(sql_query)
+            rows = result.fetchall()
+            columns = result.keys()
+            data = [dict(zip(columns, row)) for row in rows]
+            return {"status": "success", "data": data, "sql": sql_query}
         except Exception as e:
-            logging.error("Chat completion client failed: %s", e)
+            logging.error("process_query failed: %s", e)
             return {"status": "error", "error": str(e)}
 
     def persist_vault(self, vault_model, membership_id, membership_type):

@@ -72,32 +72,9 @@ Reject any query that does not conform to this schema. If a query cannot be mapp
 
 ## Few-Shot Example Mappings
 
-Below are example translations from Vault Sentinel JSON queries to SQL queries using the Destiny 2 vault database schema. Use these as reference for mapping future queries.
+Below are example translations from Vault Sentinel JSON queries to SQL queries using the Destiny 2 vault database schema. Use these as reference for mapping future queries. All examples are grouped together for clarity.
 
 ---
-
-## Supported Intents
-
-The following intents are supported by the database agent. Each intent should be mapped to a SQL query using the schema and operational rules above. If an intent cannot be mapped, return a clear error message.
-
-- `list_items_by_stat`: List items filtered by stat value, stat name, thresholds, etc.
-- `find_items_by_name`: Find items by exact or fuzzy name match.
-- `list_items_by_perk`: List items that have a specific perk.
-- `list_items_by_type`: List items by type (e.g., armor, weapon).
-- `list_items_by_tier`: List items by tier (e.g., Legendary, Exotic).
-- `list_items_by_location`: List items by location (vault, character).
-- `list_items_by_class`: List items by class type (Hunter, Warlock, Titan).
-- `list_items_by_mod`: List items with a specific mod.
-- `list_items_by_masterwork`: List items with a specific masterwork.
-- `list_items_by_socket`: List items with a specific socket or plug.
-- `list_items_by_stat_threshold`: List items meeting a stat threshold.
-- `get_item_details`: Get details for a specific item.
-- `list_characters`: List all characters for a user.
-- `list_vault_items`: List all items in the vault.
-- `list_dim_backups`: List available DIM backups.
-- `get_character_equipment`: Get equipment for a specific character.
-
-Other intents may be added as needed, but only those that can be mapped to SQL queries using the schema are supported. Intents requiring external logic (e.g., recommendations, loadout generation) are out of scope for this agent.
 
 ### Example 1: List high-stat Warlock armor in the vault
 
@@ -149,7 +126,7 @@ ORDER BY s.stat_value DESC;
 
 ---
 
-#### Example 2: Find weapons by name with perks
+### Example 2: Find weapons by name with perks
 
 **JSON Query:**
 
@@ -187,7 +164,7 @@ WHERE i.type = 'weapon'
 
 ---
 
-#### Example 3: List armor with a specific perk
+### Example 3: List armor with a specific perk
 
 **JSON Query:**
 
@@ -220,6 +197,287 @@ FROM dbo.Items i
 JOIN dbo.ItemPerks p ON i.item_id = p.item_id
 WHERE i.type = 'armor'
   AND p.perk_hash = 123456;
+```
+
+---
+
+### Example 4: List all sockets for a given item
+
+**JSON Query:**
+
+```json
+{
+    "intent": "list_items_by_socket",
+    "filters": {
+        "itemHash": 987654,
+        "socket_index": 1
+    },
+    "output": {
+        "includeInstanceData": true
+    },
+    "limit": 10
+}
+```
+
+**SQL Query:**
+
+```sql
+SELECT TOP 10
+    s.item_id,
+    s.socket_index,
+    s.socket_type_hash,
+    s.category_name,
+    s.is_visible,
+    s.is_enabled
+FROM dbo.ItemSockets s
+JOIN dbo.Items i ON s.item_id = i.item_id
+WHERE i.item_hash = 987654
+  AND s.socket_index = 1;
+```
+
+---
+
+### Example 5: List all plugs for a socket on an item
+
+**JSON Query:**
+
+```json
+{
+    "intent": "list_items_by_socket",
+    "filters": {
+        "itemHash": 987654,
+        "socket_index": 1
+    },
+    "output": {
+        "includeInstanceData": true
+    },
+    "limit": 10
+}
+```
+
+**SQL Query:**
+
+```sql
+SELECT TOP 10
+    p.item_id,
+    p.socket_index,
+    p.plug_hash,
+    p.plug_name,
+    p.plug_icon,
+    p.is_equipped
+FROM dbo.ItemPlugs p
+JOIN dbo.Items i ON p.item_id = i.item_id
+WHERE i.item_hash = 987654
+  AND p.socket_index = 1;
+```
+
+---
+
+### Example 6: Get energy details for an item instance
+
+**JSON Query:**
+
+```json
+{
+    "intent": "get_item_details",
+    "filters": {
+        "item_instance_id": 123456789
+    },
+    "output": {
+        "includeInstanceData": true
+    },
+    "limit": 1
+}
+```
+
+**SQL Query:**
+
+```sql
+SELECT
+    e.instance_id,
+    e.energy_type_hash,
+    e.energy_type_name,
+    e.capacity,
+    e.used,
+    e.unused
+FROM dbo.ItemEnergy e
+WHERE e.instance_id = 123456789;
+```
+
+---
+
+## Database Schema Reference (Source of Truth)
+
+The following is the complete Destiny 2 Vault Database Schema. All SQL queries must conform to this schema. Use table and column names exactly as defined below. This schema is the source of truth for all query generation and mapping.
+
+```sql
+-- Destiny 2 Vault Database Schema (Azure SQL / T-SQL)
+-- Source of truth: ItemModel / CharacterModel / VaultModel
+
+-- ==========================================================
+-- Users
+-- ==========================================================
+CREATE TABLE dbo.Users (
+    user_id         BIGINT        NOT NULL PRIMARY KEY,   -- Platform-agnostic internal id
+    membership_id   NVARCHAR(50)  NOT NULL,               -- Bungie membershipId
+    membership_type NVARCHAR(20)  NOT NULL,               -- Bungie membershipType
+    display_name    NVARCHAR(100) NULL,                   -- Bungie display name
+    created_at      DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME() -- Creation timestamp
+);
+
+-- ==========================================================
+-- Vaults
+-- ==========================================================
+CREATE TABLE dbo.Vaults (
+    vault_id     BIGINT        NOT NULL PRIMARY KEY,      -- Vault ID
+    user_id      BIGINT        NOT NULL,                  -- FK to Users
+    created_at   DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(), -- Creation timestamp
+    updated_at   DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(), -- Last update timestamp
+    CONSTRAINT FK_Vaults_Users FOREIGN KEY (user_id) REFERENCES dbo.Users(user_id)
+);
+
+-- ==========================================================
+-- Characters
+-- ==========================================================
+CREATE TABLE dbo.Characters (
+    character_id            BIGINT        NOT NULL PRIMARY KEY, -- Destiny 2 character ID
+    user_id                 BIGINT        NOT NULL,             -- FK to Users
+    class_type              NVARCHAR(50)  NULL,                 -- Titan/Hunter/Warlock (label)
+    light                   INT           NULL,                 -- Power level
+    race_hash               BIGINT        NULL,                 -- Destiny race hash
+    artifact_item_hash      BIGINT        NULL,                 -- Seasonal artifact definition hash
+    artifact_power_bonus    INT           NULL,                 -- Seasonal artifact power bonus
+    artifact_updated_at     DATETIME2     NULL,                 -- Last time artifact info updated
+    created_at              DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(), -- Creation timestamp
+    CONSTRAINT FK_Characters_Users FOREIGN KEY (user_id) REFERENCES dbo.Users(user_id)
+);
+CREATE INDEX IX_Characters_ArtifactHash ON dbo.Characters(artifact_item_hash);
+CREATE INDEX IX_Characters_UserId ON dbo.Characters(user_id);
+
+-- ==========================================================
+-- Items
+-- ==========================================================
+CREATE TABLE dbo.Items (
+    item_id           BIGINT        NOT NULL PRIMARY KEY,   -- Internal app id
+    character_id      BIGINT        NULL,                   -- FK to Characters
+    vault_id          BIGINT        NULL,                   -- FK to Vaults
+    item_hash         BIGINT        NOT NULL,               -- Destiny item hash
+    item_instance_id  BIGINT        NULL,                   -- Bungie instance id
+    name              NVARCHAR(100) NULL,                   -- Item name
+    type              NVARCHAR(50)  NULL,                   -- Item type label
+    tier              NVARCHAR(50)  NULL,                   -- Item tier label
+    power_value       INT           NULL,                   -- Power value
+    is_equipped       BIT           NOT NULL DEFAULT 0,     -- Equipped flag
+    content_hash      NVARCHAR(64)  NULL,                   -- Content hash
+    collectible_hash  BIGINT        NULL,                   -- Collectible hash
+    power_cap_hash    BIGINT        NULL,                   -- Power cap hash
+    season_hash       BIGINT        NULL,                   -- Season hash
+    updated_at        DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(), -- Last update timestamp
+    created_at        DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(), -- Creation timestamp
+    CONSTRAINT FK_Items_Characters FOREIGN KEY (character_id) REFERENCES dbo.Characters(character_id),
+    CONSTRAINT FK_Items_Vaults FOREIGN KEY (vault_id) REFERENCES dbo.Vaults(vault_id)
+);
+CREATE INDEX IX_Items_Character_Equipped ON dbo.Items(character_id, is_equipped);
+CREATE INDEX IX_Items_ItemHash ON dbo.Items(item_hash);
+CREATE INDEX IX_Items_InstanceId ON dbo.Items(item_instance_id);
+
+-- ==========================================================
+-- ItemStats
+-- ==========================================================
+CREATE TABLE dbo.ItemStats (
+    item_id   BIGINT       NOT NULL,                       -- FK to Items
+    stat_hash BIGINT       NOT NULL,                       -- Destiny stat hash
+    stat_name NVARCHAR(100) NULL,                          -- Stat name
+    stat_value INT          NOT NULL,                      -- Stat value
+    CONSTRAINT PK_ItemStats PRIMARY KEY (item_id, stat_hash),
+    CONSTRAINT FK_ItemStats_Items FOREIGN KEY (item_id) REFERENCES dbo.Items(item_id)
+);
+CREATE INDEX IX_ItemStats_StatHash_Value ON dbo.ItemStats(stat_hash, stat_value DESC);
+CREATE INDEX IX_ItemStats_ItemId ON dbo.ItemStats(item_id);
+
+-- ==========================================================
+-- ItemSockets
+-- ==========================================================
+CREATE TABLE dbo.ItemSockets (
+    item_id        BIGINT      NOT NULL,                   -- FK to Items
+    socket_index   INT         NOT NULL,                   -- Socket index
+    socket_type_hash BIGINT    NULL,                       -- Socket type hash
+    category_name  NVARCHAR(100) NULL,                     -- Socket category name
+    is_visible     BIT         NOT NULL DEFAULT 1,         -- Visibility flag
+    is_enabled     BIT         NOT NULL DEFAULT 1,         -- Enabled flag
+    CONSTRAINT PK_ItemSockets PRIMARY KEY (item_id, socket_index),
+    CONSTRAINT FK_ItemSockets_Items FOREIGN KEY (item_id) REFERENCES dbo.Items(item_id)
+);
+CREATE INDEX IX_ItemSockets_ItemId ON dbo.ItemSockets(item_id);
+
+-- ==========================================================
+-- ItemPlugs
+-- ==========================================================
+CREATE TABLE dbo.ItemPlugs (
+    item_id      BIGINT     NOT NULL,                      -- FK to Items
+    socket_index INT        NOT NULL,                      -- Socket index
+    plug_hash    BIGINT     NOT NULL,                      -- Plug hash
+    plug_name    NVARCHAR(100) NULL,                       -- Plug name
+    plug_icon    NVARCHAR(255) NULL,                       -- Plug icon
+    is_equipped  BIT        NOT NULL DEFAULT 0,            -- Equipped flag
+    CONSTRAINT PK_ItemPlugs PRIMARY KEY (item_id, socket_index, plug_hash),
+    CONSTRAINT FK_ItemPlugs_ItemSockets FOREIGN KEY (item_id, socket_index)
+        REFERENCES dbo.ItemSockets(item_id, socket_index)
+);
+CREATE INDEX IX_ItemPlugs_ItemId ON dbo.ItemPlugs(item_id);
+CREATE INDEX IX_ItemPlugs_SocketIndex ON dbo.ItemPlugs(socket_index);
+CREATE INDEX IX_ItemPlugs_PlugHash ON dbo.ItemPlugs(plug_hash);
+
+-- ==========================================================
+-- ItemSocketChoices
+-- ==========================================================
+CREATE TABLE dbo.ItemSocketChoices (
+    instance_id   BIGINT       NOT NULL,                   -- FK to Items.item_instance_id
+    socket_index  INT          NOT NULL,                   -- Socket index
+    plug_hash     BIGINT       NOT NULL,                   -- Plug hash
+    plug_name     NVARCHAR(100) NULL,                      -- Plug name
+    CONSTRAINT PK_ItemSocketChoices PRIMARY KEY (instance_id, socket_index, plug_hash)
+);
+CREATE INDEX IX_ItemSocketChoices_Plug ON dbo.ItemSocketChoices(plug_hash);
+CREATE INDEX IX_ItemSocketChoices_Inst ON dbo.ItemSocketChoices(instance_id);
+
+-- ==========================================================
+-- ItemSandboxPerks
+-- ==========================================================
+CREATE TABLE dbo.ItemSandboxPerks (
+    instance_id       BIGINT       NOT NULL,                -- FK to Items.item_instance_id
+    sandbox_perk_hash BIGINT       NOT NULL,                -- Sandbox perk hash
+    name              NVARCHAR(100) NULL,                   -- Perk name
+    icon              NVARCHAR(255) NULL,                   -- Perk icon
+    is_active         BIT          NOT NULL DEFAULT 0,      -- Active flag
+    is_visible        BIT          NOT NULL DEFAULT 0,      -- Visible flag
+    CONSTRAINT PK_ItemSandboxPerks PRIMARY KEY (instance_id, sandbox_perk_hash)
+);
+CREATE INDEX IX_ItemSandboxPerks_Hash ON dbo.ItemSandboxPerks(sandbox_perk_hash);
+CREATE INDEX IX_ItemSandboxPerks_Inst ON dbo.ItemSandboxPerks(instance_id);
+
+-- ==========================================================
+-- ItemEnergy
+-- ==========================================================
+CREATE TABLE dbo.ItemEnergy (
+    instance_id       BIGINT       NOT NULL PRIMARY KEY,    -- FK to Items.item_instance_id
+    energy_type_hash  BIGINT       NULL,                    -- Energy type hash
+    energy_type_name  NVARCHAR(50) NULL,                    -- Energy type name
+    capacity          INT          NULL,                    -- Energy capacity
+    used              INT          NULL,                    -- Energy used
+    unused            INT          NULL                     -- Energy unused
+);
+
+-- ==========================================================
+-- ItemSocketLayout
+-- ==========================================================
+CREATE TABLE dbo.ItemSocketLayout (
+    item_hash     BIGINT       NOT NULL,                    -- Destiny item hash
+    socket_index  INT          NOT NULL,                    -- Socket index
+    category_name NVARCHAR(100) NULL,                       -- Socket category name
+    CONSTRAINT PK_ItemSocketLayout PRIMARY KEY (item_hash, socket_index)
+);
+CREATE INDEX IX_ItemSocketLayout_ItemHash ON dbo.ItemSocketLayout(item_hash);
 ```
 
 ---

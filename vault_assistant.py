@@ -459,7 +459,7 @@ class VaultAssistant:
             save_blob(self.storage_conn_str, self.blob_container,
                     decoded_blob_name, json.dumps(decoded_items))
         return decoded_items, 200
-    
+
     def decode_characters(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
         """
         Decode the character equipment using CharacterModel.from_components for each character. Optionally include perks. Supports pagination.
@@ -597,4 +597,4 @@ class VaultAssistant:
             logging.error("Item hash %s not found in manifest.", item_hash)
             return None, 404
         return item_model.model_dump(), 200
-
+    
