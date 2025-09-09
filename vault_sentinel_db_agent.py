@@ -145,9 +145,9 @@ class VaultSentinelDBAgent:
                 return {"status": "error", "error": "AI did not return a SELECT query."}
 
             session = self.Session()
-            result = session.execute(sql_query)
-            rows = result.fetchall()
-            columns = result.keys()
+            query_result = session.execute(sql_query)
+            rows = query_result.fetchall()
+            columns = query_result.keys()
             data = [dict(zip(columns, row)) for row in rows]
             return {"status": "success", "data": data, "sql": sql_query}
         except Exception as e:
