@@ -1,0 +1,55 @@
+[
+  {
+    "intent": "list_items_by_stat",
+    "filters": {
+      "statThreshold": {"gte": 65, "stat": "Discipline"},
+      "type": "armor",
+      "location": ["vault"],
+      "classType": "Warlock"
+    },
+    "output": {
+      "includePerks": true,
+      "includeStats": true,
+      "includeInstanceData": true
+    },
+    "sort": {"field": "statValue", "direction": "desc"},
+    "limit": 25
+  },
+  {
+    "intent": "get_character_items",
+    "filters": {
+      "characterId": "123456789",
+      "type": "weapon"
+    },
+    "output": {
+      "includeStats": true,
+      "includeInstanceData": false
+    },
+    "sort": {"field": "itemName", "direction": "asc"},
+    "limit": 10
+  },
+  {
+    "intent": "find_vault_exotics",
+    "filters": {
+      "type": "exotic",
+      "location": ["vault"]
+    },
+    "output": {
+      "includePerks": true
+    },
+    "sort": {"field": "itemTier", "direction": "desc"},
+    "limit": 5
+  },
+  {
+    "intent": "list_items_by_power",
+    "filters": {
+      "powerThreshold": {"gte": 1800},
+      "type": "armor"
+    },
+    "output": {
+      "includeStats": true
+    },
+    "sort": {"field": "powerValue", "direction": "desc"},
+    "limit": 15
+  }
+]

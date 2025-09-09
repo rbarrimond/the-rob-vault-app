@@ -1,5 +1,4 @@
-import os
-import sys
+"""Unit tests for VaultSentinelDBAgent."""
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,6 +7,9 @@ from vault_sentinel_db_agent import VaultSentinelDBAgent
 
 
 def get_valid_query():
+    """
+    Returns a valid query for testing.
+    """
     return {
         "intent": "list_items_by_stat",
         "filters": {"statThreshold": {"gte": 65, "stat": "Discipline"}, "type": "armor"},
@@ -18,6 +20,7 @@ def get_valid_query():
 
 
 def test_process_query_success():
+    """Test successful processing of a valid query."""
     agent = VaultSentinelDBAgent()
     # Patch chat_client and Session
     agent.chat_client = MagicMock()
@@ -39,6 +42,7 @@ def test_process_query_success():
 
 
 def test_process_query_invalid_query():
+    """Test processing of an invalid query."""
     agent = VaultSentinelDBAgent()
     invalid_query = {"intent": None}
     with pytest.raises(ValueError):
