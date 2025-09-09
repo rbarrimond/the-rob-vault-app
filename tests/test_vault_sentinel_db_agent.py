@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# pylint: disable=import-error
 from vault_sentinel_db_agent import VaultSentinelDBAgent
 
 
