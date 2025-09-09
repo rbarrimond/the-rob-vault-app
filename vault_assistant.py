@@ -507,7 +507,7 @@ class VaultAssistant:
 
         decoded_characters: list[dict] = []
         character_models = []
-        for char_id, char_data in raw.items():
+        for _, char_data in raw.items():
             char_items = char_data.get("items", [])
             paged_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
             char_data_no_items = {k: v for k, v in char_data.items() if k != "items"}
