@@ -454,7 +454,6 @@ paths:
                   error:
                     type: string
                     example: "Failed to save object: <error message>"
-
   /query:
     post:
       summary: Send a query to the Vault Sentinel DB Agent
