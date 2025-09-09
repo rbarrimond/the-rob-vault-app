@@ -19,19 +19,16 @@ import requests
 from azure.storage.blob import BlobServiceClient
 
 from bungie_session_manager import BungieSessionManager
-from helpers import (blob_exists, get_blob_last_modified, load_blob_if_stale,
-    retry_request, load_blob, save_blob, save_dim_backup_blob)
+from constants import (API_KEY, BLOB_CONTAINER, BUNGIE_API_BASE,
+                       BUNGIE_REQUIRED_DEFS, CLASS_TYPE_MAP, REQUEST_TIMEOUT,
+                       STORAGE_CONNECTION_STRING, TABLE_NAME)
+from helpers import (blob_exists, get_blob_last_modified, load_blob,
+                     load_blob_if_stale, retry_request, save_blob,
+                     save_dim_backup_blob)
 from manifest_cache import ManifestCache
-from constants import BUNGIE_REQUIRED_DEFS, CLASS_TYPE_MAP
-from constants import (
-    API_KEY,
-    STORAGE_CONNECTION_STRING,
-    TABLE_NAME,
-    BLOB_CONTAINER,
-    BUNGIE_API_BASE,
-    REQUEST_TIMEOUT
-)
-from models import ItemModel, VaultModel, CharacterModel
+from models import CharacterModel, ItemModel, VaultModel
+from vault_sentinel_db_agent import VaultSentinelDBAgent
+
 
 class VaultAssistant:
     """
@@ -71,7 +68,8 @@ class VaultAssistant:
         self.timeout = timeout
         self.manifest_cache = ManifestCache.instance()
         self.session_manager = BungieSessionManager.instance()
-        self.db_agent = None  # Ensure db_agent attribute always exists
+        self.db_agent = VaultSentinelDBAgent()
+
 
     # Session/auth methods are now delegated to BungieSessionManager
     def exchange_code_for_token(self, code: str) -> dict:
@@ -186,7 +184,7 @@ class VaultAssistant:
 
     def process_query(self, query: dict) -> dict:
         """
-        Process a query using the Vault Sentinel DB Agent.
+        Process a Destiny 2 gear query using VaultSentinelDBAgent.
 
         Args:
             query (dict): Query conforming to the Vault Sentinel schema.
@@ -194,8 +192,6 @@ class VaultAssistant:
         Returns:
             dict: Agent response.
         """
-        if not hasattr(self, 'db_agent') or self.db_agent is None:
-            raise AttributeError("VaultAssistant is missing a db_agent instance.")
         return self.db_agent.process_query(query)
 
     def get_vault(self) -> tuple[list, int] | tuple[None, int]:
@@ -456,12 +452,14 @@ class VaultAssistant:
                 decoded["perks"] = item.perks
             decoded_items.append(decoded)
 
+        # Persist to DB if returning full set
+        if limit is None and offset == 0 and self.db_agent and hasattr(self.db_agent, "session"):
+            self.db_agent.persist_vault(vault_model, membership_id, membership_type)
         if limit is None and offset == 0:
-            # Only save if we are returning the full set or a positive slice from the start
-            # (to avoid saving partial slices)
             save_blob(self.storage_conn_str, self.blob_container,
                     decoded_blob_name, json.dumps(decoded_items))
         return decoded_items, 200
+    
     def decode_characters(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
         """
         Decode the character equipment using CharacterModel.from_components for each character. Optionally include perks. Supports pagination.
@@ -508,6 +506,7 @@ class VaultAssistant:
             return [], 400
 
         decoded_characters: list[dict] = []
+        character_models = []
         for char_id, char_data in raw.items():
             char_items = char_data.get("items", [])
             paged_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
@@ -523,9 +522,14 @@ class VaultAssistant:
                 cleaned_items.append(it_dict)
             char_dict["items"] = cleaned_items
             decoded_characters.append(char_dict)
+            character_models.append(char_model)
 
+        # Persist to DB if returning full set
+        if limit is None and offset == 0 and self.db_agent and hasattr(self.db_agent, "session"):
+            self.db_agent.persist_characters(character_models, membership_id, membership_type)
         if limit is None and offset == 0:
             save_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, json.dumps(decoded_characters))
+
         return decoded_characters, 200
 
     def get_session_token(self) -> tuple[dict, int]:
@@ -593,3 +597,4 @@ class VaultAssistant:
             logging.error("Item hash %s not found in manifest.", item_hash)
             return None, 404
         return item_model.model_dump(), 200
+

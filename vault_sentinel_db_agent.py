@@ -1,3 +1,4 @@
+#pylint: disable=broad-except, invalid-name, line-too-long
 """
 Vault Sentinel DB Agent for Azure AI
 ------------------------------------
@@ -11,9 +12,11 @@ import logging
 import os
 from typing import Any, Dict
 
-import pyodbc
+from sqlalchemy import create_engine, orm
 from azure.identity import DefaultAzureCredential
 from openai import AzureOpenAI
+
+from models import Character, User, Vault, Item, ItemStat
 
 # Azure OpenAI and SQL DB configuration
 OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -29,6 +32,7 @@ class VaultSentinelDBAgent:
     Business logic agent for Destiny 2 gear queries, designed for use in Azure Function App endpoints.
     Implements schema validation and core query processing logic.
     """
+
     def __init__(self):
         logging.info("VaultSentinelDBAgent initialized.")
         # Managed Identity for Azure services
@@ -43,18 +47,29 @@ class VaultSentinelDBAgent:
                 api_version=OPENAI_API_VERSION
             )
             logging.info("Connected to Azure OpenAI Chat Completions.")
-        # Azure SQL DB connection
-        self.sql_conn = None
-        if SQL_SERVER and SQL_DATABASE:
-            conn_str = (
-                f"Driver={{{SQL_DRIVER}}};Server={SQL_SERVER};Database={SQL_DATABASE};"
-                "Authentication=ActiveDirectoryMsi;Encrypt=yes;TrustServerCertificate=no;"
+
+        # SQLAlchemy engine and sessionmaker for ORM persistence
+        # Build connection string from environment variables
+        if SQL_SERVER and SQL_DATABASE and SQL_DRIVER:
+            # SQLAlchemy ODBC connection string for MSSQL
+            connection_string = (
+                f"mssql+pyodbc://@{SQL_SERVER}/{SQL_DATABASE}?"
+                f"driver={SQL_DRIVER.replace(' ', '+')}"
+                "&authentication=ActiveDirectoryMsi"
+                "&Encrypt=yes&TrustServerCertificate=no"
             )
             try:
-                self.sql_conn = pyodbc.connect(conn_str)
-                logging.info("Connected to Azure SQL DB.")
+                self.engine = create_engine(connection_string)
+                self.Session = orm.sessionmaker(bind=self.engine)
+                logging.info("SQLAlchemy engine/session initialized for Azure SQL DB.")
             except Exception as e:
-                logging.error("Failed to connect to Azure SQL DB: %s", e)
+                logging.error("Failed to initialize SQLAlchemy engine: %s", e)
+                self.engine = None
+                self.Session = None
+        else:
+            logging.error("SQL_SERVER, SQL_DATABASE, or SQL_DRIVER environment variable not set.")
+            self.Session = None
+
 
     def validate_query(self, query: Dict[str, Any]) -> bool:
         """
@@ -126,6 +141,163 @@ class VaultSentinelDBAgent:
             logging.error("Chat completion client failed: %s", e)
             return {"status": "error", "error": str(e)}
 
+    def persist_vault(self, vault_model, membership_id, membership_type):
+        """
+        Persist a VaultModel to the database using ORM models.
+        Args:
+            vault_model: VaultModel instance
+            membership_id: Destiny 2 membership ID
+            membership_type: Destiny 2 membership type
+        Returns:
+            dict: Result status
+        """
+        if not self.Session:
+            logging.error("SQLAlchemy sessionmaker not initialized.")
+            return {"status": "error", "error": "Sessionmaker not initialized"}
+        session = self.Session()
+        try:
+            user_obj = session.query(User).filter_by(membership_id=membership_id).first()
+            if not user_obj:
+                user_obj = User(membership_id=membership_id, membership_type=membership_type)
+                session.add(user_obj)
+                session.flush()
+            vault_obj = Vault(user_id=user_obj.user_id)
+            session.add(vault_obj)
+            session.flush()
+            for item in vault_model.items:
+                item_obj = Item(
+                    vault_id=vault_obj.vault_id,
+                    item_hash=item.itemHash,
+                    item_instance_id=item.itemInstanceId,
+                    name=item.itemName,
+                    type=item.itemType,
+                    tier=item.itemTier,
+                    power_value=item.stats.get("Power"),
+                    is_equipped=item.isEquipped
+                )
+                session.add(item_obj)
+                session.flush()
+                for stat_name, stat_value in item.stats.items():
+                    stat_obj = ItemStat(
+                        item_id=item_obj.item_id,
+                        stat_hash=0,
+                        stat_name=stat_name,
+                        stat_value=stat_value
+                    )
+                    session.add(stat_obj)
+            session.commit()
+            return {"status": "success"}
+        except Exception as e:
+            session.rollback()
+            logging.error("Failed to persist vault: %s", e)
+            return {"status": "error", "error": str(e)}
+        finally:
+            session.close()
+
+    def persist_characters(self, character_models, membership_id, membership_type):
+        """
+        Persist a list of CharacterModel instances to the database using ORM models.
+        Args:
+            character_models: List of CharacterModel instances
+            membership_id: Destiny 2 membership ID
+            membership_type: Destiny 2 membership type
+        Returns:
+            dict: Result status
+        """
+        if not self.Session:
+            logging.error("SQLAlchemy sessionmaker not initialized.")
+            return {"status": "error", "error": "Sessionmaker not initialized"}
+        session = self.Session()
+        try:
+            user_obj = session.query(User).filter_by(membership_id=membership_id).first()
+            if not user_obj:
+                user_obj = User(membership_id=membership_id, membership_type=membership_type)
+                session.add(user_obj)
+                session.flush()
+            for char_model in character_models:
+                char_obj = Character(
+                    user_id=user_obj.user_id,
+                    character_id=char_model.charId,
+                    class_type=char_model.classType,
+                    light=char_model.light,
+                    race_hash=0
+                )
+                session.add(char_obj)
+                session.flush()
+                for item in char_model.items:
+                    item_obj = Item(
+                        character_id=char_obj.character_id,
+                        item_hash=item.itemHash,
+                        item_instance_id=item.itemInstanceId,
+                        name=item.itemName,
+                        type=item.itemType,
+                        tier=item.itemTier,
+                        power_value=item.stats.get("Power"),
+                        is_equipped=item.isEquipped
+                    )
+                    session.add(item_obj)
+                    session.flush()
+                    for stat_name, stat_value in item.stats.items():
+                        stat_obj = ItemStat(
+                            item_id=item_obj.item_id,
+                            stat_hash=0,
+                            stat_name=stat_name,
+                            stat_value=stat_value
+                        )
+                        session.add(stat_obj)
+            session.commit()
+            return {"status": "success"}
+        except Exception as e:
+            session.rollback()
+            logging.error("Failed to persist characters: %s", e)
+            return {"status": "error", "error": str(e)}
+        finally:
+            session.close()
+
+    def persist_item(self, item_model, character_id=None, vault_id=None):
+        """
+        Persist a single ItemModel to the database using ORM models.
+        Args:
+            item_model: ItemModel instance
+            character_id: Optional character_id to associate
+            vault_id: Optional vault_id to associate
+        Returns:
+            dict: Result status
+        """
+        if not self.Session:
+            logging.error("SQLAlchemy sessionmaker not initialized.")
+            return {"status": "error", "error": "Sessionmaker not initialized"}
+        session = self.Session()
+        try:
+            item_obj = Item(
+                character_id=character_id,
+                vault_id=vault_id,
+                item_hash=item_model.itemHash,
+                item_instance_id=item_model.itemInstanceId,
+                name=item_model.itemName,
+                type=item_model.itemType,
+                tier=item_model.itemTier,
+                power_value=item_model.stats.get("Power"),
+                is_equipped=item_model.isEquipped
+            )
+            session.add(item_obj)
+            session.flush()
+            for stat_name, stat_value in item_model.stats.items():
+                stat_obj = ItemStat(
+                    item_id=item_obj.item_id,
+                    stat_hash=0,
+                    stat_name=stat_name,
+                    stat_value=stat_value
+                )
+                session.add(stat_obj)
+            session.commit()
+            return {"status": "success"}
+        except Exception as e:
+            session.rollback()
+            logging.error("Failed to persist item: %s", e)
+            return {"status": "error", "error": str(e)}
+        finally:
+            session.close()
 
 # Usage Example (for local testing only)
 if __name__ == "__main__":
