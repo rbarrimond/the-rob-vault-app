@@ -173,9 +173,15 @@ def get_blob_last_modified(connection_string: str, container_name: str, blob_nam
     return None
 
 
-def load_blob_if_stale(connection_string: str, container_name: str, blob_name: str, reference_date: datetime | str) -> Optional[bytes]:
+def load_blob_if_stale(connection_string: str, container_name: str, blob_name: str, reference_date: datetime | str, is_expiration: bool = False) -> Optional[bytes]:
     """
-    Returns the blob if its last modified date is before the reference_date (i.e., blob is stale), otherwise returns None.
+    Returns the blob if it is stale or expired based on reference_date.
+    If is_expiration is True, reference_date is treated as an expiration date:
+        - If blob's last modified date is after reference_date, blob is expired (return None).
+        - If blob's last modified date is before or equal to reference_date, blob is valid (return blob).
+    If is_expiration is False, reference_date is treated as a freshness threshold:
+        - If blob's last modified date is before reference_date, blob is stale (return blob).
+        - Otherwise, return None.
     Both dates can be datetime objects or ISO format strings.
     """
     modified_date = get_blob_last_modified(connection_string, container_name, blob_name)
@@ -183,9 +189,14 @@ def load_blob_if_stale(connection_string: str, container_name: str, blob_name: s
         return None
     if isinstance(reference_date, str):
         reference_date = datetime.fromisoformat(reference_date)
-    if modified_date < reference_date:
+    if is_expiration:
+        if modified_date > reference_date:
+            return None
         return load_blob(connection_string, container_name, blob_name)
-    return None
+    else:
+        if modified_date < reference_date:
+            return load_blob(connection_string, container_name, blob_name)
+        return None
 
 def save_table_entity(connection_string: str, table_name: str, entity: dict) -> None:
     """
