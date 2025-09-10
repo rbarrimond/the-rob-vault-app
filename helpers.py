@@ -189,16 +189,10 @@ def load_valid_blob(connection_string: str, container_name: str, blob_name: str,
         return None
     if isinstance(reference_date, str):
         reference_date = datetime.fromisoformat(reference_date)
-    if is_expiration:
-        if modified_date > reference_date:
-            return None
-        else:
-            return load_blob(connection_string, container_name, blob_name)
-    else:
-        if modified_date < reference_date:
-            return None
-        else:
-            return load_blob(connection_string, container_name, blob_name)
+    is_valid = (modified_date < reference_date) if is_expiration else (modified_date >= reference_date)
+    if is_valid:
+        return load_blob(connection_string, container_name, blob_name)
+    return None
 
 def save_table_entity(connection_string: str, table_name: str, entity: dict) -> None:
     """
