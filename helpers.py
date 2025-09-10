@@ -173,15 +173,15 @@ def get_blob_last_modified(connection_string: str, container_name: str, blob_nam
     return None
 
 
-def load_blob_if_stale(connection_string: str, container_name: str, blob_name: str, reference_date: datetime | str, is_expiration: bool = False) -> Optional[bytes]:
+def load_valid_blob(connection_string: str, container_name: str, blob_name: str, reference_date: datetime | str, is_expiration: bool = False) -> Optional[bytes]:
     """
-    Returns the blob if it is stale or expired based on reference_date.
+    Loads the blob only if it is NOT expired or stale.
     If is_expiration is True, reference_date is treated as an expiration date:
-        - If blob's last modified date is after reference_date, blob is expired (return None).
-        - If blob's last modified date is before or equal to reference_date, blob is valid (return blob).
+        - If blob's last modified date is after reference_date, blob is expired (do NOT load, return None).
+        - Otherwise, load and return the blob.
     If is_expiration is False, reference_date is treated as a freshness threshold:
-        - If blob's last modified date is before reference_date, blob is stale (return blob).
-        - Otherwise, return None.
+        - If blob's last modified date is before reference_date, blob is stale (do NOT load, return None).
+        - Otherwise, load and return the blob.
     Both dates can be datetime objects or ISO format strings.
     """
     modified_date = get_blob_last_modified(connection_string, container_name, blob_name)
@@ -192,11 +192,13 @@ def load_blob_if_stale(connection_string: str, container_name: str, blob_name: s
     if is_expiration:
         if modified_date > reference_date:
             return None
-        return load_blob(connection_string, container_name, blob_name)
+        else:
+            return load_blob(connection_string, container_name, blob_name)
     else:
         if modified_date < reference_date:
+            return None
+        else:
             return load_blob(connection_string, container_name, blob_name)
-        return None
 
 def save_table_entity(connection_string: str, table_name: str, entity: dict) -> None:
     """
