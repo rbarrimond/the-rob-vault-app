@@ -453,7 +453,7 @@ class VaultAssistant:
             decoded_items.append(decoded)
 
         # Persist to DB if returning full set
-        if limit is None and offset == 0 and self.db_agent and hasattr(self.db_agent, "session"):
+        if limit is None and offset == 0 and self.db_agent and hasattr(self.db_agent, "Session"):
             self.db_agent.persist_vault(vault_model, membership_id, membership_type)
         if limit is None and offset == 0:
             save_blob(self.storage_conn_str, self.blob_container,
@@ -525,7 +525,7 @@ class VaultAssistant:
             character_models.append(char_model)
 
         # Persist to DB if returning full set
-        if limit is None and offset == 0 and self.db_agent and hasattr(self.db_agent, "session"):
+        if limit is None and offset == 0 and self.db_agent and hasattr(self.db_agent, "Session"):
             self.db_agent.persist_characters(character_models, membership_id, membership_type)
         if limit is None and offset == 0:
             save_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, json.dumps(decoded_characters))
