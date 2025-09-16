@@ -68,7 +68,7 @@ class VaultAssistant:
         self.timeout = timeout
         self.manifest_cache = ManifestCache.instance()
         self.session_manager = BungieSessionManager.instance()
-        self.db_agent = VaultSentinelDBAgent()
+    # DB agent is provided via factory (on-demand); do not construct here to avoid cold-start hangs.
 
 
     # Session/auth methods are now delegated to BungieSessionManager
@@ -192,7 +192,16 @@ class VaultAssistant:
         Returns:
             dict: Agent response.
         """
-        return self.db_agent.process_query(query)
+        try:
+            agent = VaultSentinelDBAgent.instance()
+        except Exception as e:
+            logging.error("Failed to obtain DB agent instance: %s", e)
+            return {"status": "error", "error": "DB agent unavailable. Check configuration and logs."}
+        # Allow graceful error if underlying services not configured
+        if not getattr(agent, "Session", None):
+            logging.error("DB agent Session not initialized.")
+            return {"status": "error", "error": "Database not configured."}
+        return agent.process_query(query)
 
     def get_vault(self) -> tuple[list, int] | tuple[None, int]:
         """
@@ -452,9 +461,14 @@ class VaultAssistant:
                 decoded["perks"] = item.perks
             decoded_items.append(decoded)
 
-        # Persist to DB if returning full set
-        if limit is None and offset == 0 and self.db_agent and hasattr(self.db_agent, "Session"):
-            self.db_agent.persist_vault(vault_model, membership_id, membership_type)
+        # Persist to DB if returning full set (on-demand agent)
+        if limit is None and offset == 0 and VaultSentinelDBAgent.is_db_configured():
+            try:
+                _agent = VaultSentinelDBAgent.instance()
+                if getattr(_agent, "Session", None):
+                    _agent.persist_vault(vault_model, membership_id, membership_type)
+            except Exception as e:
+                logging.warning("Skipping DB persist_vault due to initialization error: %s", e)
         if limit is None and offset == 0:
             save_blob(self.storage_conn_str, self.blob_container,
                     decoded_blob_name, json.dumps(decoded_items))
@@ -524,9 +538,14 @@ class VaultAssistant:
             decoded_characters.append(char_dict)
             character_models.append(char_model)
 
-        # Persist to DB if returning full set
-        if limit is None and offset == 0 and self.db_agent and hasattr(self.db_agent, "Session"):
-            self.db_agent.persist_characters(character_models, membership_id, membership_type)
+        # Persist to DB if returning full set (on-demand agent)
+        if limit is None and offset == 0 and VaultSentinelDBAgent.is_db_configured():
+            try:
+                _agent = VaultSentinelDBAgent.instance()
+                if getattr(_agent, "Session", None):
+                    _agent.persist_characters(character_models, membership_id, membership_type)
+            except Exception as e:
+                logging.warning("Skipping DB persist_characters due to initialization error: %s", e)
         if limit is None and offset == 0:
             save_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, json.dumps(decoded_characters))
 

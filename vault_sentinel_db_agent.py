@@ -10,9 +10,12 @@ Azure best practices for reliability, security, and performance.
 import json
 import logging
 import os
+import time
+import threading
 from typing import Any, Dict
 
-from sqlalchemy import create_engine, orm
+from sqlalchemy import create_engine, orm, text
+from sqlalchemy.exc import OperationalError, TimeoutError as SA_TimeoutError
 from azure.identity import DefaultAzureCredential
 from openai import AzureOpenAI
 
@@ -30,8 +33,38 @@ SQL_DRIVER = os.getenv("AZURE_SQL_DRIVER", "ODBC Driver 18 for SQL Server")
 class VaultSentinelDBAgent:
     """
     Business logic agent for Destiny 2 gear queries, designed for use in Azure Function App endpoints.
-    Implements schema validation and core query processing logic.
+    Implements schema validation and core query processing logic with Azure SQL cold start mitigation.
     """
+
+    _instance = None
+
+    @classmethod
+    def instance(cls) -> "VaultSentinelDBAgent":
+        """Thread-safe singleton factory for the DB agent."""
+        if not hasattr(cls, "_instance_lock"):
+            cls._instance_lock = threading.RLock()
+        if cls._instance is None:
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+
+    @classmethod
+    def reset_instance(cls) -> None:
+        """Reset the singleton instance (useful for tests)."""
+        if hasattr(cls, "_instance_lock"):
+            with cls._instance_lock:
+                cls._instance = None
+        else:
+            cls._instance = None
+
+    @classmethod
+    def is_db_configured(cls) -> bool:
+        """Quick check to see if minimal DB env vars are set without constructing the agent."""
+        server = os.getenv("AZURE_SQL_SERVER")
+        database = os.getenv("AZURE_SQL_DATABASE")
+        driver = os.getenv("AZURE_SQL_DRIVER", "ODBC Driver 18 for SQL Server")
+        return bool(server and database and driver)
 
     def __init__(self):
         logging.info("VaultSentinelDBAgent initialized.")
@@ -49,27 +82,134 @@ class VaultSentinelDBAgent:
             logging.info("Connected to Azure OpenAI Chat Completions.")
 
         # SQLAlchemy engine and sessionmaker for ORM persistence
-        # Build connection string from environment variables
-        if SQL_SERVER and SQL_DATABASE and SQL_DRIVER:
-            # SQLAlchemy ODBC connection string for MSSQL
-            connection_string = (
-                f"mssql+pyodbc://@{SQL_SERVER}/{SQL_DATABASE}?"
-                f"driver={SQL_DRIVER.replace(' ', '+')}"
-                "&authentication=ActiveDirectoryMsi"
-                "&Encrypt=yes&TrustServerCertificate=no"
-            )
-            try:
-                self.engine = create_engine(connection_string)
-                self.Session = orm.sessionmaker(bind=self.engine)
-                logging.info("SQLAlchemy engine/session initialized for Azure SQL DB.")
-            except Exception as e:
-                logging.error("Failed to initialize SQLAlchemy engine: %s", e)
-                self.engine = None
-                self.Session = None
-        else:
+        self.engine = None
+        self.Session = None
+        self._connection_warmed = False
+        self._initialize_database_connection()
+
+    def _initialize_database_connection(self):
+        """Initialize database connection optimized for Azure SQL Database cold starts."""
+        if not (SQL_SERVER and SQL_DATABASE and SQL_DRIVER):
             logging.error("SQL_SERVER, SQL_DATABASE, or SQL_DRIVER environment variable not set.")
+            return
+
+        # Azure SQL connection string optimized for cold starts
+        connection_string = (
+            f"mssql+pyodbc://@{SQL_SERVER}.database.windows.net/{SQL_DATABASE}?"
+            f"driver={SQL_DRIVER.replace(' ', '+')}&"
+            "authentication=ActiveDirectoryMsi&"
+            "Encrypt=yes&TrustServerCertificate=no&"
+            "Connection+Timeout=60&"  # Extended timeout for cold starts
+            "Command+Timeout=60&"     # Extended command timeout
+            "LoginTimeout=60"         # Extended login timeout
+        )
+        
+        # Engine configuration optimized for Azure SQL cold starts
+        engine_config = {
+            "pool_pre_ping": True,      # Validate connections before use
+            "pool_recycle": 1800,       # Recycle connections every 30 minutes
+            "pool_timeout": 60,         # Extended pool timeout for cold starts
+            "max_overflow": 5,          # Conservative overflow for serverless
+            "pool_size": 2,             # Small pool size for serverless
+            "echo": False,              # Set to True for SQL debugging
+            "connect_args": {
+                "timeout": 60,          # Connection timeout
+                "autocommit": False     # Explicit transaction control
+            }
+        }
+
+        try:
+            self.engine = create_engine(connection_string, **engine_config)
+            self.Session = orm.sessionmaker(bind=self.engine)
+            logging.info("SQLAlchemy engine/session initialized for Azure SQL DB.")
+            
+            # Attempt connection warmup in background
+            self._warmup_connection()
+            
+        except Exception as e:
+            logging.error("Failed to initialize SQLAlchemy engine: %s", e)
+            self.engine = None
             self.Session = None
 
+    def _warmup_connection(self):
+        """Warm up the database connection to mitigate cold start issues."""
+        if not self.Session:
+            return
+            
+        max_warmup_attempts = 3
+        warmup_delay = 2
+        
+        for attempt in range(max_warmup_attempts):
+            try:
+                session = self.Session()
+                try:
+                    # Simple warmup query with extended timeout
+                    warm_val = session.execute(text("SELECT 1 as warmup")).scalar()
+                    if warm_val == 1:
+                        self._connection_warmed = True
+                        logging.info("Database connection warmed up successfully.")
+                        return
+                finally:
+                    session.close()
+                    
+            except (OperationalError, SA_TimeoutError) as e:
+                logging.warning(
+                    "Database warmup attempt %d/%d failed (expected for cold start): %s", 
+                    attempt + 1, max_warmup_attempts, str(e)
+                )
+                if attempt < max_warmup_attempts - 1:
+                    time.sleep(warmup_delay)
+                    warmup_delay *= 2
+            except Exception as e:
+                logging.error("Unexpected error during database warmup: %s", e)
+                break
+        
+        logging.warning("Database warmup incomplete - connection may experience cold start delays.")
+
+    def _get_session_with_cold_start_handling(self):
+        """Get a database session with Azure SQL cold start mitigation."""
+        if not self.Session:
+            raise RuntimeError("Database session not available")
+        
+        max_attempts = 5 if not self._connection_warmed else 3
+        base_delay = 2
+        
+        for attempt in range(max_attempts):
+            try:
+                session = self.Session()
+                
+                # Test the session with a lightweight query
+                session.execute(text("SELECT 1")).scalar()
+                return session
+                
+            except (OperationalError, SA_TimeoutError) as e:
+                if session:
+                    session.close()
+                
+                # Check if this looks like a cold start issue
+                error_msg = str(e).lower()
+                is_cold_start = any(indicator in error_msg for indicator in [
+                    'login timeout', 'connection timeout', 'hyt00', 
+                    'server is not ready', 'database is starting'
+                ])
+                
+                if is_cold_start and attempt < max_attempts - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logging.warning(
+                        "Cold start detected on attempt %d/%d, retrying in %d seconds: %s", 
+                        attempt + 1, max_attempts, delay, str(e)
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    raise RuntimeError(f"Database session failed after {attempt + 1} attempts: {e}") from e
+                    
+            except Exception as e:
+                if session:
+                    session.close()
+                raise RuntimeError(f"Unexpected database error: {e}") from e
+        
+        raise RuntimeError(f"Failed to create database session after {max_attempts} attempts")
 
     def validate_query(self, query: Dict[str, Any]) -> bool:
         """
@@ -144,12 +284,16 @@ class VaultSentinelDBAgent:
                 logging.error("AI did not return a SELECT query.")
                 return {"status": "error", "error": "AI did not return a SELECT query."}
 
-            session = self.Session()
-            query_result = session.execute(sql_query)
-            rows = query_result.fetchall()
-            columns = query_result.keys()
-            data = [dict(zip(columns, row)) for row in rows]
-            return {"status": "success", "data": data, "sql": sql_query}
+            session = self._get_session_with_cold_start_handling()
+            try:
+                query_result = session.execute(text(sql_query))
+                rows = query_result.fetchall()
+                columns = query_result.keys()
+                data = [dict(zip(columns, row)) for row in rows]
+                return {"status": "success", "data": data, "sql": sql_query}
+            finally:
+                session.close()
+                
         except Exception as e:
             logging.error("process_query failed: %s", e)
             return {"status": "error", "error": str(e)}
@@ -164,10 +308,12 @@ class VaultSentinelDBAgent:
         Returns:
             dict: Result status
         """
-        if not self.Session:
-            logging.error("SQLAlchemy sessionmaker not initialized.")
-            return {"status": "error", "error": "Sessionmaker not initialized"}
-        session = self.Session()
+        try:
+            session = self._get_session_with_cold_start_handling()
+        except RuntimeError as e:
+            logging.error("Failed to get database session: %s", e)
+            return {"status": "error", "error": str(e)}
+            
         try:
             user_obj = session.query(User).filter_by(membership_id=membership_id).first()
             if not user_obj:
@@ -217,10 +363,12 @@ class VaultSentinelDBAgent:
         Returns:
             dict: Result status
         """
-        if not self.Session:
-            logging.error("SQLAlchemy sessionmaker not initialized.")
-            return {"status": "error", "error": "Sessionmaker not initialized"}
-        session = self.Session()
+        try:
+            session = self._get_session_with_cold_start_handling()
+        except RuntimeError as e:
+            logging.error("Failed to get database session: %s", e)
+            return {"status": "error", "error": str(e)}
+            
         try:
             user_obj = session.query(User).filter_by(membership_id=membership_id).first()
             if not user_obj:
@@ -277,10 +425,12 @@ class VaultSentinelDBAgent:
         Returns:
             dict: Result status
         """
-        if not self.Session:
-            logging.error("SQLAlchemy sessionmaker not initialized.")
-            return {"status": "error", "error": "Sessionmaker not initialized"}
-        session = self.Session()
+        try:
+            session = self._get_session_with_cold_start_handling()
+        except RuntimeError as e:
+            logging.error("Failed to get database session: %s", e)
+            return {"status": "error", "error": str(e)}
+            
         try:
             item_obj = Item(
                 character_id=character_id,
@@ -314,7 +464,7 @@ class VaultSentinelDBAgent:
 
 # Usage Example (for local testing only)
 if __name__ == "__main__":
-    agent = VaultSentinelDBAgent()
+    agent = VaultSentinelDBAgent.instance()
     sample_query = {
         "intent": "list_items_by_stat",
         "filters": {

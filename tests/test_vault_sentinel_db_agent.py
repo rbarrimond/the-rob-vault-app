@@ -22,7 +22,8 @@ def get_valid_query():
 
 def test_process_query_success():
     """Test successful processing of a valid query."""
-    agent = VaultSentinelDBAgent()
+    VaultSentinelDBAgent.reset_instance()
+    agent = VaultSentinelDBAgent.instance()
     # Patch chat_client and Session
     agent.chat_client = MagicMock()
     agent.chat_client.chat.completions.create.return_value = MagicMock(
@@ -44,7 +45,8 @@ def test_process_query_success():
 
 def test_process_query_invalid_query():
     """Test processing of an invalid query."""
-    agent = VaultSentinelDBAgent()
+    VaultSentinelDBAgent.reset_instance()
+    agent = VaultSentinelDBAgent.instance()
     invalid_query = {"intent": None}
     with pytest.raises(ValueError):
         agent.process_query(invalid_query)
