@@ -68,7 +68,7 @@ class VaultAssistant:
         self.timeout = timeout
         self.manifest_cache = ManifestCache.instance()
         self.session_manager = BungieSessionManager.instance()
-    # DB agent is provided via factory (on-demand); do not construct here to avoid cold-start hangs.
+        # DB agent is provided via factory (on-demand); do not construct here to avoid cold-start hangs.
 
 
     # Session/auth methods are now delegated to BungieSessionManager

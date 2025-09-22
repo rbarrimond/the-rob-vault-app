@@ -442,7 +442,8 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("[dim/list] GET request received.")
     try:
         session = assistant.get_session()
-        membership_id = session.get("membershipId")
+        # Use snake_case key returned by VaultAssistant.get_session()
+        membership_id = session.get("membership_id")
         if not membership_id:
             logging.warning("[dim/list] No stored membership ID found.")
             return func.HttpResponse("No stored membership ID found.", status_code=400)

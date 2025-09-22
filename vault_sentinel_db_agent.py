@@ -7,28 +7,26 @@ All queries must conform to the embedded schema. Uses Managed Identity for authe
 Azure best practices for reliability, security, and performance.
 """
 
+
 import json
 import logging
-import os
-import time
 import threading
+import time
+import urllib.parse
 from typing import Any, Dict
 
-from sqlalchemy import create_engine, orm, text
-from sqlalchemy.exc import OperationalError, TimeoutError as SA_TimeoutError
-from azure.identity import DefaultAzureCredential
 from openai import AzureOpenAI
+from sqlalchemy import create_engine, orm, text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as SaTimeoutError
 
-from models import Character, User, Vault, Item, ItemStat
+from constants import (
+    OPENAI_API_KEY, OPENAI_API_VERSION, OPENAI_DEPLOYMENT,
+    OPENAI_ENDPOINT, SQL_DATABASE, SQL_DRIVER, SQL_SERVER,
+    SQL_USER, SQL_PASSWORD
+)
+from models import Character, Item, ItemStat, User, Vault
 
-# Azure OpenAI and SQL DB configuration
-OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
-OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2023-05-15")
-OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
-SQL_SERVER = os.getenv("AZURE_SQL_SERVER")
-SQL_DATABASE = os.getenv("AZURE_SQL_DATABASE")
-SQL_DRIVER = os.getenv("AZURE_SQL_DRIVER", "ODBC Driver 18 for SQL Server")
 
 class VaultSentinelDBAgent:
     """
@@ -60,16 +58,11 @@ class VaultSentinelDBAgent:
 
     @classmethod
     def is_db_configured(cls) -> bool:
-        """Quick check to see if minimal DB env vars are set without constructing the agent."""
-        server = os.getenv("AZURE_SQL_SERVER")
-        database = os.getenv("AZURE_SQL_DATABASE")
-        driver = os.getenv("AZURE_SQL_DRIVER", "ODBC Driver 18 for SQL Server")
-        return bool(server and database and driver)
+        """Quick check to see if minimal DB config constants are set without constructing the agent."""
+        return bool(SQL_SERVER and SQL_DATABASE and SQL_DRIVER)
 
     def __init__(self):
         logging.info("VaultSentinelDBAgent initialized.")
-        # Managed Identity for Azure services
-        self.credential = DefaultAzureCredential()
         # Azure OpenAI Chat Completions client
         self.chat_client = None
         if OPENAI_ENDPOINT:
@@ -90,20 +83,37 @@ class VaultSentinelDBAgent:
     def _initialize_database_connection(self):
         """Initialize database connection optimized for Azure SQL Database cold starts."""
         if not (SQL_SERVER and SQL_DATABASE and SQL_DRIVER):
-            logging.error("SQL_SERVER, SQL_DATABASE, or SQL_DRIVER environment variable not set.")
+            logging.error("SQL_SERVER, SQL_DATABASE, or SQL_DRIVER constant not set.")
             return
 
-        # Azure SQL connection string optimized for cold starts
-        connection_string = (
-            f"mssql+pyodbc://@{SQL_SERVER}.database.windows.net/{SQL_DATABASE}?"
-            f"driver={SQL_DRIVER.replace(' ', '+')}&"
-            "authentication=ActiveDirectoryMsi&"
-            "Encrypt=yes&TrustServerCertificate=no&"
-            "Connection+Timeout=60&"  # Extended timeout for cold starts
-            "Command+Timeout=60&"     # Extended command timeout
-            "LoginTimeout=60"         # Extended login timeout
-        )
-        
+        # Choose authentication method: SQL auth if user/password, else Managed Identity
+        if SQL_USER and SQL_PASSWORD:
+            # Use the exact ODBC connection string as in the working test, URL-encoded for SQLAlchemy
+            odbc_str = (
+                f"DRIVER={{{SQL_DRIVER}}};"
+                f"SERVER={SQL_SERVER};"
+                f"DATABASE={SQL_DATABASE};"
+                f"UID={SQL_USER};"
+                f"PWD={SQL_PASSWORD};"
+                "Encrypt=yes;"
+                "TrustServerCertificate=no;"
+                "Connection Timeout=30;"
+            )
+            sqlalchemy_url = "mssql+pyodbc:///?odbc_connect=" + urllib.parse.quote_plus(odbc_str)
+            logging.info("Using SQL authentication for database connection.")
+        else:
+            odbc_str = (
+                f"DRIVER={{{SQL_DRIVER}}};"
+                f"SERVER={SQL_SERVER};"
+                f"DATABASE={SQL_DATABASE};"
+                "authentication=ActiveDirectoryMsi;"
+                "Encrypt=yes;"
+                "TrustServerCertificate=no;"
+                "Connection Timeout=30;"
+            )
+            sqlalchemy_url = "mssql+pyodbc:///?odbc_connect=" + urllib.parse.quote_plus(odbc_str)
+            logging.info("Using Managed Identity for database connection.")
+
         # Engine configuration optimized for Azure SQL cold starts
         engine_config = {
             "pool_pre_ping": True,      # Validate connections before use
@@ -119,13 +129,11 @@ class VaultSentinelDBAgent:
         }
 
         try:
-            self.engine = create_engine(connection_string, **engine_config)
+            self.engine = create_engine(sqlalchemy_url, **engine_config)
             self.Session = orm.sessionmaker(bind=self.engine)
             logging.info("SQLAlchemy engine/session initialized for Azure SQL DB.")
-            
             # Attempt connection warmup in background
             self._warmup_connection()
-            
         except Exception as e:
             logging.error("Failed to initialize SQLAlchemy engine: %s", e)
             self.engine = None
@@ -152,7 +160,7 @@ class VaultSentinelDBAgent:
                 finally:
                     session.close()
                     
-            except (OperationalError, SA_TimeoutError) as e:
+            except (OperationalError, SaTimeoutError) as e:
                 logging.warning(
                     "Database warmup attempt %d/%d failed (expected for cold start): %s", 
                     attempt + 1, max_warmup_attempts, str(e)
@@ -174,6 +182,7 @@ class VaultSentinelDBAgent:
         max_attempts = 5 if not self._connection_warmed else 3
         base_delay = 2
         
+        session = None
         for attempt in range(max_attempts):
             try:
                 session = self.Session()
@@ -182,7 +191,7 @@ class VaultSentinelDBAgent:
                 session.execute(text("SELECT 1")).scalar()
                 return session
                 
-            except (OperationalError, SA_TimeoutError) as e:
+            except (OperationalError, SaTimeoutError) as e:
                 if session:
                     session.close()
                 
@@ -257,6 +266,10 @@ class VaultSentinelDBAgent:
         if not self.Session:
             logging.error("SQLAlchemy sessionmaker not initialized.")
             return {"status": "error", "error": "Sessionmaker not initialized"}
+
+        if self.chat_client is None:
+            logging.error("Azure OpenAI client is not configured. Set AZURE_OPENAI_* settings.")
+            return {"status": "error", "error": "Azure OpenAI not configured."}
 
         # Get instructions for the AI
         with open("db-agent-instructions.md", "r", encoding="utf-8") as f:

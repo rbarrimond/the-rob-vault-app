@@ -25,7 +25,6 @@ azure-storage-blob
 ########################################
 # Azure SQL and AI integration
 ########################################
-azure-ai-inference
 azure-identity
 openai
 pyodbc

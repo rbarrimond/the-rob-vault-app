@@ -117,7 +117,7 @@ SELECT TOP 25
 FROM dbo.Items i
 JOIN dbo.Characters c ON i.character_id = c.character_id
 JOIN dbo.ItemStats s ON i.item_id = s.item_id AND s.stat_name = 'Discipline'
-LEFT JOIN dbo.ItemPerks p ON i.item_id = p.item_id
+LEFT JOIN dbo.ItemPlugs p ON i.item_id = p.item_id
 WHERE i.type = 'armor'
   AND c.class_type = 'Warlock'
   AND s.stat_value >= 65
@@ -194,7 +194,7 @@ SELECT TOP 5
     p.perk_name,
     p.description
 FROM dbo.Items i
-JOIN dbo.ItemPerks p ON i.item_id = p.item_id
+JOIN dbo.ItemPlugs p ON i.item_id = p.item_id
 WHERE i.type = 'armor'
   AND p.perk_hash = 123456;
 ```
