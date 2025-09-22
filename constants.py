@@ -4,6 +4,17 @@ Module containing constants for Destiny 2 Vault Assistant.
 
 import os
 
+# Azure OpenAI and SQL configuration constants
+OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2023-05-15")
+OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+SQL_SERVER = os.getenv("AZURE_SQL_SERVER")
+SQL_DATABASE = os.getenv("AZURE_SQL_DATABASE")
+SQL_DRIVER = os.getenv("AZURE_SQL_DRIVER", "ODBC Driver 18 for SQL Server")
+SQL_USER = os.getenv("AZURE_SQL_ADMIN_LOGIN")
+SQL_PASSWORD = os.getenv("AZURE_SQL_ADMIN_PASSWORD")
+
 # API and Azure configuration constants
 BUNGIE_API_BASE = "https://www.bungie.net/Platform"
 API_KEY = os.getenv("BUNGIE_API_KEY")
