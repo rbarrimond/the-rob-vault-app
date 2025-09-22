@@ -5,7 +5,7 @@
 -- Users
 -- ==========================================================
 CREATE TABLE dbo.Users (
-    user_id         BIGINT        NOT NULL PRIMARY KEY,   -- Platform-agnostic internal id
+    user_id         BIGINT        IDENTITY(1,1) NOT NULL PRIMARY KEY,   -- Platform-agnostic internal id
     membership_id   NVARCHAR(50)  NOT NULL,               -- Bungie membershipId
     membership_type NVARCHAR(20)  NOT NULL,               -- Bungie membershipType
     display_name    NVARCHAR(100) NULL,                   -- Bungie display name
@@ -16,7 +16,7 @@ CREATE TABLE dbo.Users (
 -- Vaults
 -- ==========================================================
 CREATE TABLE dbo.Vaults (
-    vault_id     BIGINT        NOT NULL PRIMARY KEY,      -- Vault ID
+    vault_id     BIGINT        IDENTITY(1,1) NOT NULL PRIMARY KEY,      -- Vault ID
     user_id      BIGINT        NOT NULL,                  -- FK to Users
     created_at   DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(), -- Creation timestamp
     updated_at   DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(), -- Last update timestamp
@@ -45,7 +45,7 @@ CREATE INDEX IX_Characters_UserId ON dbo.Characters(user_id);
 -- Items
 -- ==========================================================
 CREATE TABLE dbo.Items (
-    item_id           BIGINT        NOT NULL PRIMARY KEY,   -- Internal app id
+    item_id           BIGINT        IDENTITY(1,1) NOT NULL PRIMARY KEY,   -- Internal app id
     character_id      BIGINT        NULL,                   -- FK to Characters
     vault_id          BIGINT        NULL,                   -- FK to Vaults
     item_hash         BIGINT        NOT NULL,               -- Destiny item hash

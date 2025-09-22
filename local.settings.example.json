@@ -1,0 +1,22 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "<your-connection-string>",
+    "AZURE_STORAGE_CONNECTION_STRING": "<your-connection-string>",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "BUNGIE_CLIENT_ID": "<client-id>",
+    "BUNGIE_CLIENT_SECRET": "<client-secret>",
+    "BUNGIE_API_KEY": "<api-key>",
+    "BUNGIE_REDIRECT_URI": "<redirect-uri>",
+    "AZURE_SQL_SERVER": "<sql-server-host>",
+    "AZURE_SQL_DATABASE": "<database-name>",
+    "AZURE_SQL_ADMIN_LOGIN": "<sql-username>",
+    "AZURE_SQL_ADMIN_PASSWORD": "<sql-password>",
+    "AZURE_OPENAI_ENDPOINT": "<https://your-resource.openai.azure.com>",
+    "AZURE_OPENAI_API_KEY": "<api-key>",
+    "AZURE_OPENAI_DEPLOYMENT": "<deployment-name>",
+    "AZURE_OPENAI_API_VERSION": "2025-04-14",
+    "WEBSITE_RUN_FROM_PACKAGE": "0"
+  }
+}
+

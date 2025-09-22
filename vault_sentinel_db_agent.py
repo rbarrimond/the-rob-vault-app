@@ -19,6 +19,7 @@ from openai import AzureOpenAI
 from sqlalchemy import create_engine, orm, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import TimeoutError as SaTimeoutError
+import re
 
 from constants import (
     OPENAI_API_KEY, OPENAI_API_VERSION, OPENAI_DEPLOYMENT,
@@ -293,9 +294,10 @@ class VaultSentinelDBAgent:
             )
             sql_query = response.choices[0].message.content.strip() if response.choices else ""
             logging.info("AI-generated SQL: %s", sql_query)
-            if not sql_query.lower().startswith("select"):
-                logging.error("AI did not return a SELECT query.")
-                return {"status": "error", "error": "AI did not return a SELECT query."}
+            valid, reason = self._validate_sql(sql_query)
+            if not valid:
+                logging.error("Rejected AI SQL: %s", reason)
+                return {"status": "error", "error": f"Rejected SQL: {reason}"}
 
             session = self._get_session_with_cold_start_handling()
             try:
@@ -310,6 +312,53 @@ class VaultSentinelDBAgent:
         except Exception as e:
             logging.error("process_query failed: %s", e)
             return {"status": "error", "error": str(e)}
+
+    # --- SQL Validation ---
+    _ALLOWED_TABLES = {
+        'users', 'vaults', 'characters', 'items', 'itemstats', 'itemsockets',
+        'itemplugs', 'itemsocketchoices', 'itemsandboxperks', 'itemenergy', 'itemsocketlayout'
+    }
+
+    _FORBIDDEN_KEYWORDS = {
+        'insert', 'update', 'delete', 'drop', 'alter', 'create', 'exec', 'execute',
+        'merge', 'grant', 'revoke', 'truncate', 'sp_', 'xp_'
+    }
+
+    def _validate_sql(self, sql_query: str) -> tuple[bool, str]:
+        q = (sql_query or '').strip()
+        if not q:
+            return False, 'empty query'
+        ql = q.lower()
+        if not ql.startswith('select'):
+            return False, 'must be a SELECT query'
+        if len(q) > 8000:
+            return False, 'query too long'
+        # disallow multi-statements and comments
+        if ';' in ql:
+            return False, 'multiple statements not allowed'
+        if '--' in ql or '/*' in ql or '*/' in ql:
+            return False, 'comments not allowed'
+        # forbid dangerous keywords
+        for kw in self._FORBIDDEN_KEYWORDS:
+            if re.search(rf"\b{re.escape(kw)}\b", ql):
+                return False, f'forbidden keyword: {kw}'
+        # Extract table identifiers after FROM and JOIN and validate
+        def base_table(name: str) -> str:
+            # strip schema and brackets: dbo.[Items] -> items
+            n = name.strip()
+            n = n.strip('[]')
+            if '.' in n:
+                n = n.split('.')[-1]
+            return n.lower()
+        for token in re.findall(r"\bfrom\s+([\w\[\]\.]+)|\bjoin\s+([\w\[\]\.]+)", ql):
+            cand = token[0] or token[1]
+            if not cand:
+                continue
+            tbl = base_table(cand)
+            # allow aliases like items i => we already captured just the first name
+            if tbl not in self._ALLOWED_TABLES:
+                return False, f'unknown or disallowed table: {tbl}'
+        return True, 'ok'
 
     def persist_vault(self, vault_model, membership_id, membership_type):
         """

@@ -515,7 +515,7 @@ class User(Base):
     SQLAlchemy ORM model representing a Destiny 2 user/account.
     """
     __tablename__ = 'Users'
-    user_id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, primary_key=True, autoincrement=True)
     membership_id = Column(String(50), nullable=False)
     membership_type = Column(String(20), nullable=False)
     display_name = Column(String(100))
@@ -543,7 +543,7 @@ class Vault(Base):
     SQLAlchemy ORM model representing the shared Destiny 2 vault.
     """
     __tablename__ = 'Vaults'
-    vault_id = Column(BigInteger, primary_key=True)
+    vault_id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, ForeignKey('Users.user_id'), nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
     updated_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
@@ -555,7 +555,7 @@ class Item(Base):
     SQLAlchemy ORM model representing an inventory item for a character.
     """
     __tablename__ = 'Items'
-    item_id = Column(BigInteger, primary_key=True)
+    item_id = Column(BigInteger, primary_key=True, autoincrement=True)
     character_id = Column(BigInteger, ForeignKey('Characters.character_id'))
     vault_id = Column(BigInteger, ForeignKey('Vaults.vault_id'))
     item_hash = Column(BigInteger, nullable=False)
