@@ -472,6 +472,18 @@ class VaultSentinelDBAgent:
             self._sync_item_children(session, item_obj, item_model, instance_id)
         return item_obj
 
+    def _delete_item(self, session, item_obj: Item) -> None:
+        item_id = item_obj.item_id
+        instance_id = item_obj.item_instance_id
+        session.query(ItemStat).filter_by(item_id=item_id).delete(synchronize_session=False)
+        session.query(ItemSocket).filter_by(item_id=item_id).delete(synchronize_session=False)
+        session.query(ItemPlug).filter_by(item_id=item_id).delete(synchronize_session=False)
+        if instance_id is not None:
+            session.query(ItemEnergy).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+            session.query(ItemSocketChoice).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+            session.query(ItemSandboxPerk).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+        session.delete(item_obj)
+
     def _sync_item_children(self, session, item_obj: Item, item_model, instance_id: int | None) -> None:
         """Replace child records (stats, sockets, energy, etc.) for an item."""
         session.query(ItemStat).filter(ItemStat.item_id == item_obj.item_id).delete(synchronize_session=False)
@@ -586,8 +598,16 @@ class VaultSentinelDBAgent:
         try:
             user_obj = self._get_or_create_user(session, membership_id, membership_type)
             vault_obj = self._get_or_create_vault(session, user_obj.user_id)
+            seen_item_ids: set[int] = set()
             for item in vault_model.items:
-                self._persist_item_record(session, item, vault_id=vault_obj.vault_id)
+                db_item = self._persist_item_record(session, item, vault_id=vault_obj.vault_id)
+                if db_item.item_id is not None:
+                    seen_item_ids.add(db_item.item_id)
+
+            existing_items = session.query(Item).filter_by(vault_id=vault_obj.vault_id).all()
+            for db_item in existing_items:
+                if db_item.item_id not in seen_item_ids:
+                    self._delete_item(session, db_item)
             session.commit()
             return {"status": "success"}
         except Exception as e:
@@ -630,8 +650,16 @@ class VaultSentinelDBAgent:
                 session.add(char_obj)
                 session.flush()
 
+                seen_item_ids: set[int] = set()
                 for item in char_model.items:
-                    self._persist_item_record(session, item, character_id=char_obj.character_id)
+                    db_item = self._persist_item_record(session, item, character_id=char_obj.character_id)
+                    if db_item.item_id is not None:
+                        seen_item_ids.add(db_item.item_id)
+
+                existing_items = session.query(Item).filter_by(character_id=char_obj.character_id).all()
+                for db_item in existing_items:
+                    if db_item.item_id not in seen_item_ids:
+                        self._delete_item(session, db_item)
             session.commit()
             return {"status": "success"}
         except Exception as e:
