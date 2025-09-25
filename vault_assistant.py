@@ -70,6 +70,28 @@ class VaultAssistant:
         self.session_manager = BungieSessionManager.instance()
         # DB agent is provided via factory (on-demand); do not construct here to avoid cold-start hangs.
 
+    @staticmethod
+    def _merge_item_components(component_payload: dict | None) -> dict[str, dict]:
+        """Combine per-component sections into a single instance-id keyed map."""
+        if not component_payload:
+            return {}
+        combined: dict[str, dict] = {}
+        mapping = {
+            "instances": "instance",
+            "stats": "stats",
+            "perks": "perks",
+            "sockets": "sockets",
+            "reusablePlugs": "reusablePlugs",
+        }
+        for source_key, target_key in mapping.items():
+            data_section = component_payload.get(source_key, {}) or {}
+            data_map = data_section.get("data", {}) if isinstance(data_section, dict) else {}
+            for instance_id, payload in (data_map or {}).items():
+                key = str(instance_id)
+                entry = combined.setdefault(key, {})
+                entry[target_key] = {"data": payload}
+        return combined
+
 
     # Session/auth methods are now delegated to BungieSessionManager
     def exchange_code_for_token(self, code: str) -> dict:
@@ -452,8 +474,28 @@ class VaultAssistant:
             return [], 404
         items = json.loads(blob_data)
         paged_items = items[offset:offset + limit] if limit is not None else items[offset:]
+
+        components_map: dict[str, dict] = {}
+        try:
+            components_url = (
+                f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components="
+                "300,302,304,305,310"
+            )
+            components_resp = retry_request(
+                requests.get, components_url, headers=headers, timeout=self.timeout)
+            if components_resp.ok:
+                components_payload = components_resp.json().get("Response", {}).get("itemComponents", {})
+                components_map = self._merge_item_components(components_payload)
+            else:
+                logging.warning(
+                    "Failed to fetch item components for vault decode. Status: %d",
+                    components_resp.status_code
+                )
+        except Exception as exc:
+            logging.warning("Error fetching item components for vault decode: %s", exc)
+
         # Use VaultModel.from_components to decode and enrich inventory
-        vault_model = VaultModel.from_components(paged_items, {})
+        vault_model = VaultModel.from_components(paged_items, components_map)
         decoded_items = []
         for item in vault_model.items:
             decoded = item.model_dump()
@@ -519,6 +561,25 @@ class VaultAssistant:
             logging.error("Unexpected characters blob format (expected dict of characterId->{items}).")
             return [], 400
 
+        components_map: dict[str, dict] = {}
+        try:
+            components_url = (
+                f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components="
+                "300,302,304,305,310"
+            )
+            components_resp = retry_request(
+                requests.get, components_url, headers=headers, timeout=self.timeout)
+            if components_resp.ok:
+                components_payload = components_resp.json().get("Response", {}).get("itemComponents", {})
+                components_map = self._merge_item_components(components_payload)
+            else:
+                logging.warning(
+                    "Failed to fetch item components for character decode. Status: %d",
+                    components_resp.status_code
+                )
+        except Exception as exc:
+            logging.warning("Error fetching item components for character decode: %s", exc)
+
         decoded_characters: list[dict] = []
         character_models = []
         for _, char_data in raw.items():
@@ -526,7 +587,8 @@ class VaultAssistant:
             paged_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
             char_data_no_items = {k: v for k, v in char_data.items() if k != "items"}
             artifact_raw = char_data.get("artifact") if isinstance(char_data.get("artifact"), dict) else None
-            char_model = CharacterModel.from_components(char_data_no_items, paged_items, {}, artifact_raw=artifact_raw)
+            char_model = CharacterModel.from_components(
+                char_data_no_items, paged_items, components_map, artifact_raw=artifact_raw)
             char_dict = char_model.model_dump()
             cleaned_items: list[dict] = []
             for it in char_model.items:

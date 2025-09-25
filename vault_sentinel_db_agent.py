@@ -10,6 +10,7 @@ Azure best practices for reliability, security, and performance.
 
 import json
 import logging
+import re
 import threading
 import time
 import urllib.parse
@@ -19,14 +20,25 @@ from openai import AzureOpenAI
 from sqlalchemy import create_engine, orm, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import TimeoutError as SaTimeoutError
-import re
 
 from constants import (
     OPENAI_API_KEY, OPENAI_API_VERSION, OPENAI_DEPLOYMENT,
     OPENAI_ENDPOINT, SQL_DATABASE, SQL_DRIVER, SQL_SERVER,
     SQL_USER, SQL_PASSWORD
 )
-from models import Character, Item, ItemStat, User, Vault
+from helpers import compute_hash
+from models import (
+    Character,
+    Item,
+    ItemEnergy,
+    ItemPlug,
+    ItemSandboxPerk,
+    ItemSocket,
+    ItemSocketChoice,
+    ItemStat,
+    User,
+    Vault,
+)
 
 
 class VaultSentinelDBAgent:
@@ -287,6 +299,7 @@ class VaultSentinelDBAgent:
 
         try:
             response = self.chat_client.chat.completions.create(
+                model=OPENAI_DEPLOYMENT,
                 messages=[system_message, user_message],
                 temperature=0.0,
                 frequency_penalty=0.0,
@@ -360,6 +373,190 @@ class VaultSentinelDBAgent:
                 return False, f'unknown or disallowed table: {tbl}'
         return True, 'ok'
 
+    @staticmethod
+    def _safe_int(value: Any) -> int | None:
+        """Convert a value to int when possible, returning None on failure."""
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            try:
+                return int(str(value))
+            except (TypeError, ValueError):
+                return None
+
+    def _get_or_create_user(self, session, membership_id: str, membership_type: str) -> User:
+        user_obj = session.query(User).filter_by(membership_id=membership_id).first()
+        if not user_obj:
+            user_obj = User(membership_id=membership_id, membership_type=membership_type)
+            session.add(user_obj)
+            session.flush()
+        return user_obj
+
+    def _get_or_create_vault(self, session, user_id: int) -> Vault:
+        vault_obj = session.query(Vault).filter_by(user_id=user_id).first()
+        if not vault_obj:
+            vault_obj = Vault(user_id=user_id)
+            session.add(vault_obj)
+            session.flush()
+        return vault_obj
+
+    def _persist_item_record(
+        self,
+        session,
+        item_model,
+        *,
+        character_id: int | None = None,
+        vault_id: int | None = None,
+    ) -> Item:
+        instance_id = self._safe_int(item_model.itemInstanceId)
+        character_id = self._safe_int(character_id)
+        vault_id = self._safe_int(vault_id)
+
+        item_hash = self._safe_int(item_model.itemHash)
+        if item_hash is None:
+            item_hash = item_model.itemHash
+
+        item_obj = None
+        if instance_id is not None:
+            item_obj = session.query(Item).filter_by(item_instance_id=instance_id).first()
+
+        if not item_obj:
+            filter_kwargs = {"item_hash": item_hash}
+            if character_id is not None:
+                filter_kwargs["character_id"] = character_id
+            if vault_id is not None:
+                filter_kwargs["vault_id"] = vault_id
+            item_obj = session.query(Item).filter_by(**filter_kwargs).first()
+
+        if not item_obj:
+            item_obj = Item()
+
+        item_obj.character_id = character_id
+        item_obj.vault_id = vault_id
+        item_obj.item_hash = item_hash
+        item_obj.item_instance_id = instance_id
+        item_obj.name = item_model.itemName
+        item_obj.type = item_model.itemType
+        item_obj.tier = item_model.itemTier
+        item_obj.power_value = item_model.stats.get("Power")
+        item_obj.is_equipped = item_model.isEquipped
+
+        try:
+            content_payload = {
+                "itemHash": item_model.itemHash,
+                "name": item_model.itemName,
+                "type": item_model.itemType,
+                "tier": item_model.itemTier,
+                "stats": item_model.stats,
+                "perks": item_model.perks,
+                "statDetails": [detail.model_dump() for detail in item_model.statDetails],
+            }
+            item_obj.content_hash = compute_hash(json.dumps(content_payload, sort_keys=True, default=str))
+        except Exception:  # pragma: no cover - hashing best effort
+            pass
+
+        session.add(item_obj)
+        session.flush()
+        self._sync_item_children(session, item_obj, item_model, instance_id)
+        return item_obj
+
+    def _sync_item_children(self, session, item_obj: Item, item_model, instance_id: int | None) -> None:
+        """Replace child records (stats, sockets, energy, etc.) for an item."""
+        session.query(ItemStat).filter(ItemStat.item_id == item_obj.item_id).delete(synchronize_session=False)
+        if item_model.statDetails:
+            for detail in item_model.statDetails:
+                stat_hash = self._safe_int(detail.hash)
+                if stat_hash is None:
+                    continue
+                session.add(ItemStat(
+                    item_id=item_obj.item_id,
+                    stat_hash=stat_hash,
+                    stat_name=detail.name,
+                    stat_value=detail.value
+                ))
+        else:
+            for stat_name, stat_value in item_model.stats.items():
+                session.add(ItemStat(
+                    item_id=item_obj.item_id,
+                    stat_hash=0,
+                    stat_name=stat_name,
+                    stat_value=stat_value
+                ))
+
+        session.query(ItemSocket).filter(ItemSocket.item_id == item_obj.item_id).delete(synchronize_session=False)
+        session.query(ItemPlug).filter(ItemPlug.item_id == item_obj.item_id).delete(synchronize_session=False)
+        sockets = item_model.perks.get("sockets", []) or []
+        for socket in sockets:
+            socket_index = self._safe_int(socket.get("socketIndex"))
+            if socket_index is None:
+                continue
+            socket_record = ItemSocket(
+                item_id=item_obj.item_id,
+                socket_index=socket_index,
+                socket_type_hash=self._safe_int(socket.get("socketTypeHash")),
+                category_name=socket.get("categoryName"),
+                is_visible=bool(socket.get("isVisible", False)),
+                is_enabled=bool(socket.get("isEnabled", False))
+            )
+            session.add(socket_record)
+            equipped = socket.get("equipped") or {}
+            plug_hash = self._safe_int(equipped.get("hash"))
+            if plug_hash is not None:
+                session.add(ItemPlug(
+                    item_id=item_obj.item_id,
+                    socket_index=socket_index,
+                    plug_hash=plug_hash,
+                    plug_name=equipped.get("name"),
+                    plug_icon=equipped.get("icon"),
+                    is_equipped=True
+                ))
+
+        if instance_id is not None:
+            session.query(ItemEnergy).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+            energy_entries = item_model.perks.get("energy") or []
+            if energy_entries:
+                energy = energy_entries[0]
+                session.add(ItemEnergy(
+                    instance_id=instance_id,
+                    energy_type_hash=self._safe_int(energy.get("type_hash")),
+                    energy_type_name=energy.get("type_name"),
+                    capacity=self._safe_int(energy.get("capacity")),
+                    used=self._safe_int(energy.get("used")),
+                    unused=self._safe_int(energy.get("unused"))
+                ))
+
+            session.query(ItemSocketChoice).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+            for choice in item_model.perks.get("reusablePlugs", []) or []:
+                socket_index = self._safe_int(choice.get("socketIndex"))
+                if socket_index is None:
+                    continue
+                for plug in choice.get("choices", []) or []:
+                    plug_hash = self._safe_int(plug.get("hash"))
+                    if plug_hash is None:
+                        continue
+                    session.add(ItemSocketChoice(
+                        instance_id=instance_id,
+                        socket_index=socket_index,
+                        plug_hash=plug_hash,
+                        plug_name=plug.get("name")
+                    ))
+
+            session.query(ItemSandboxPerk).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+            for perk in item_model.perks.get("sandboxPerks", []) or []:
+                perk_hash = self._safe_int(perk.get("hash"))
+                if perk_hash is None:
+                    continue
+                session.add(ItemSandboxPerk(
+                    instance_id=instance_id,
+                    sandbox_perk_hash=perk_hash,
+                    name=perk.get("name"),
+                    icon=perk.get("icon"),
+                    is_active=bool(perk.get("active", False)),
+                    is_visible=bool(perk.get("visible", False))
+                ))
+
     def persist_vault(self, vault_model, membership_id, membership_type):
         """
         Persist a VaultModel to the database using ORM models.
@@ -377,35 +574,10 @@ class VaultSentinelDBAgent:
             return {"status": "error", "error": str(e)}
             
         try:
-            user_obj = session.query(User).filter_by(membership_id=membership_id).first()
-            if not user_obj:
-                user_obj = User(membership_id=membership_id, membership_type=membership_type)
-                session.add(user_obj)
-                session.flush()
-            vault_obj = Vault(user_id=user_obj.user_id)
-            session.add(vault_obj)
-            session.flush()
+            user_obj = self._get_or_create_user(session, membership_id, membership_type)
+            vault_obj = self._get_or_create_vault(session, user_obj.user_id)
             for item in vault_model.items:
-                item_obj = Item(
-                    vault_id=vault_obj.vault_id,
-                    item_hash=item.itemHash,
-                    item_instance_id=item.itemInstanceId,
-                    name=item.itemName,
-                    type=item.itemType,
-                    tier=item.itemTier,
-                    power_value=item.stats.get("Power"),
-                    is_equipped=item.isEquipped
-                )
-                session.add(item_obj)
-                session.flush()
-                for stat_name, stat_value in item.stats.items():
-                    stat_obj = ItemStat(
-                        item_id=item_obj.item_id,
-                        stat_hash=0,
-                        stat_name=stat_name,
-                        stat_value=stat_value
-                    )
-                    session.add(stat_obj)
+                self._persist_item_record(session, item, vault_id=vault_obj.vault_id)
             session.commit()
             return {"status": "success"}
         except Exception as e:
@@ -432,42 +604,24 @@ class VaultSentinelDBAgent:
             return {"status": "error", "error": str(e)}
             
         try:
-            user_obj = session.query(User).filter_by(membership_id=membership_id).first()
-            if not user_obj:
-                user_obj = User(membership_id=membership_id, membership_type=membership_type)
-                session.add(user_obj)
-                session.flush()
+            user_obj = self._get_or_create_user(session, membership_id, membership_type)
             for char_model in character_models:
-                char_obj = Character(
-                    user_id=user_obj.user_id,
-                    character_id=char_model.charId,
-                    class_type=char_model.classType,
-                    light=char_model.light,
-                    race_hash=0
-                )
+                character_id = self._safe_int(char_model.charId)
+                if character_id is None:
+                    logging.warning("Skipping character with non-numeric ID: %s", char_model.charId)
+                    continue
+                char_obj = session.query(Character).filter_by(character_id=character_id).first()
+                if not char_obj:
+                    char_obj = Character(character_id=character_id, user_id=user_obj.user_id)
+                char_obj.user_id = user_obj.user_id
+                char_obj.class_type = char_model.classType
+                char_obj.light = self._safe_int(char_model.light)
+                char_obj.race_hash = self._safe_int(char_model.race)
                 session.add(char_obj)
                 session.flush()
+
                 for item in char_model.items:
-                    item_obj = Item(
-                        character_id=char_obj.character_id,
-                        item_hash=item.itemHash,
-                        item_instance_id=item.itemInstanceId,
-                        name=item.itemName,
-                        type=item.itemType,
-                        tier=item.itemTier,
-                        power_value=item.stats.get("Power"),
-                        is_equipped=item.isEquipped
-                    )
-                    session.add(item_obj)
-                    session.flush()
-                    for stat_name, stat_value in item.stats.items():
-                        stat_obj = ItemStat(
-                            item_id=item_obj.item_id,
-                            stat_hash=0,
-                            stat_name=stat_name,
-                            stat_value=stat_value
-                        )
-                        session.add(stat_obj)
+                    self._persist_item_record(session, item, character_id=char_obj.character_id)
             session.commit()
             return {"status": "success"}
         except Exception as e:
@@ -494,27 +648,7 @@ class VaultSentinelDBAgent:
             return {"status": "error", "error": str(e)}
             
         try:
-            item_obj = Item(
-                character_id=character_id,
-                vault_id=vault_id,
-                item_hash=item_model.itemHash,
-                item_instance_id=item_model.itemInstanceId,
-                name=item_model.itemName,
-                type=item_model.itemType,
-                tier=item_model.itemTier,
-                power_value=item_model.stats.get("Power"),
-                is_equipped=item_model.isEquipped
-            )
-            session.add(item_obj)
-            session.flush()
-            for stat_name, stat_value in item_model.stats.items():
-                stat_obj = ItemStat(
-                    item_id=item_obj.item_id,
-                    stat_hash=0,
-                    stat_name=stat_name,
-                    stat_value=stat_value
-                )
-                session.add(stat_obj)
+            self._persist_item_record(session, item_model, character_id=character_id, vault_id=vault_id)
             session.commit()
             return {"status": "success"}
         except Exception as e:

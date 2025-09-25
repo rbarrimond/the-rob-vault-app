@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import requests
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import (BigInteger, Boolean, Column, DateTime, ForeignKey,
                         ForeignKeyConstraint, Index, Integer, String, desc,
                         text)
@@ -24,6 +24,16 @@ from manifest_cache import ManifestCache
 
 
 # --- Pydantic Models ---
+
+
+class ItemStatDetail(BaseModel):
+    """Represents a stat value along with its Destiny hash."""
+
+    hash: int
+    name: str
+    value: int
+
+
 class ItemModel(BaseModel):
     """
     Pydantic model for a Destiny 2 item.
@@ -50,8 +60,9 @@ class ItemModel(BaseModel):
     itemName: str
     itemType: str
     itemTier: Optional[str]
-    stats: Dict[str, int] = dict()  # noqa: RUF012
-    perks: Dict[str, List[Dict[str, Any]]] = dict()
+    stats: Dict[str, int] = Field(default_factory=dict)
+    statDetails: List[ItemStatDetail] = Field(default_factory=list)
+    perks: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
     energy: Optional[Dict[str, Any]] = None  # {type_hash, type_name, capacity, used, unused}
     sockets: Optional[List[Dict[str, Any]]] = None  # list of {index, visible, enabled, equipped{name,hash,icon}}
     sandboxPerks: Optional[List[Dict[str, Any]]] = None  # 302 perks (artifact/passives)
@@ -64,12 +75,23 @@ class ItemModel(BaseModel):
         """
         Extract stats from a stats dict using manifest_cache for name resolution.
         """
-        stats = {}
+        stats: Dict[str, int] = {}
+        details: List[ItemStatDetail] = []
         for stat_hash, stat_obj in (stats_data or {}).items():
             stat_def, _ = manifest_cache.resolve_manifest_hash(stat_hash, ["DestinyStatDefinition"])
             stat_name = (stat_def or {}).get("displayProperties", {}).get("name") or str(stat_hash)
-            stats[stat_name] = stat_obj.get("value")
-        return stats
+            value = stat_obj.get("value")
+            try:
+                stat_hash_int = int(stat_hash)
+            except Exception:
+                try:
+                    stat_hash_int = int(str(stat_hash))
+                except Exception:
+                    stat_hash_int = None
+            stats[stat_name] = value
+            if stat_hash_int is not None:
+                details.append(ItemStatDetail(hash=stat_hash_int, name=stat_name, value=value))
+        return stats, details
 
     @staticmethod
     def _extract_energy(energy_data, manifest_cache):
@@ -171,7 +193,13 @@ class ItemModel(BaseModel):
         item_type = (item_def or {}).get("itemTypeDisplayName", "Unknown")
         item_tier = (item_def or {}).get("inventory", {}).get("tierTypeName", "Unknown")
 
-        stats = cls._extract_stats((item_def or {}).get("stats", {}).get("stats", {}), manifest_cache)
+        stats: Dict[str, int] = {}
+        stat_details: Dict[int, ItemStatDetail] = {}
+
+        base_stats, base_details = cls._extract_stats((item_def or {}).get("stats", {}).get("stats", {}), manifest_cache)
+        stats.update(base_stats)
+        for detail in base_details:
+            stat_details[detail.hash] = detail
         perks: Dict[str, List[Dict[str, Any]]] = dict()
 
         if components:
@@ -181,7 +209,10 @@ class ItemModel(BaseModel):
             if energy:
                 perks["energy"] = [energy]
             # 304 stats
-            stats.update(cls._extract_stats((components.get("stats") or {}).get("data", {}).get("stats", {}), manifest_cache))
+            inst_stats, inst_details = cls._extract_stats((components.get("stats") or {}).get("data", {}).get("stats", {}), manifest_cache)
+            stats.update(inst_stats)
+            for detail in inst_details:
+                stat_details[detail.hash] = detail
             # 302 sandbox perks
             sp_list = cls._extract_sandbox_perks((components.get("perks") or {}).get("data", {}).get("perks", []), manifest_cache)
             if sp_list:
@@ -201,6 +232,8 @@ class ItemModel(BaseModel):
             session_manager = BungieSessionManager.instance()
             inst_info = cls._build_instance_info(raw_item.get("itemInstanceId"), session_manager, manifest_cache)
             stats.update(inst_info.get("instanceStats", {}))
+            for detail in inst_info.get("instanceStatDetails", []):
+                stat_details[detail.hash] = detail
             if "energy" in inst_info:
                 perks["energy"] = [inst_info["energy"]]
             if "instanceSockets" in inst_info:
@@ -217,6 +250,7 @@ class ItemModel(BaseModel):
             itemType=item_type,
             itemTier=item_tier,
             stats=stats,
+            statDetails=list(stat_details.values()),
             perks=perks,
             location=raw_item.get("location"),
             isEquipped=raw_item.get("isEquipped", False),
@@ -250,12 +284,16 @@ class ItemModel(BaseModel):
             item_type = item_def.get("itemTypeDisplayName", item_type)
             item_tier = item_def.get("inventory", {}).get("tierTypeName", None)
 
-        stats: Dict[str, int] = dict()
-        perks: Dict[str, List[Dict[str, Any]]] = dict()
+        stats: Dict[str, int] = {}
+        stat_details: Dict[int, ItemStatDetail] = {}
+        perks: Dict[str, List[Dict[str, Any]]] = {}
 
         if item_components:
             # 304 stats
-            stats.update(cls._extract_stats((item_components.get("stats") or {}).get("data", {}).get("stats", {}), manifest_cache))
+            inst_stats, inst_details = cls._extract_stats((item_components.get("stats") or {}).get("data", {}).get("stats", {}), manifest_cache)
+            stats.update(inst_stats)
+            for detail in inst_details:
+                stat_details[detail.hash] = detail
             # 300 energy
             inst = (item_components.get("instance") or {}).get("data", {})
             energy = cls._extract_energy(inst.get("energy"), manifest_cache)
@@ -323,6 +361,7 @@ class ItemModel(BaseModel):
             itemType=item_type,
             itemTier=item_tier,
             stats=stats,
+            statDetails=list(stat_details.values()),
             perks=perks,
             location=raw_item.get("location"),
             isEquipped=raw_item.get("isEquipped", False),
@@ -377,7 +416,9 @@ class ItemModel(BaseModel):
         # 304 — instance stats (names resolved)
         inst_stats = instance_data.get("stats", {}).get("data", {}).get("stats", {})
         if inst_stats:
-            info["instanceStats"] = ItemModel._extract_stats(inst_stats, manifest_cache)
+            inst_stats_map, inst_details = ItemModel._extract_stats(inst_stats, manifest_cache)
+            info["instanceStats"] = inst_stats_map
+            info["instanceStatDetails"] = inst_details
 
         # 302 — sandbox perks (artifact/passives)
         sp_list = ItemModel._extract_sandbox_perks(instance_data.get("perks", {}).get("data", {}).get("perks", []), manifest_cache)
