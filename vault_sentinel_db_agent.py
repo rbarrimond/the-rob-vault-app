@@ -433,6 +433,24 @@ class VaultSentinelDBAgent:
         if not item_obj:
             item_obj = Item()
 
+        # Compute new content hash from item model snapshot
+        new_hash = None
+        try:
+            content_payload = {
+                "itemHash": item_hash,
+                "name": item_model.itemName,
+                "type": item_model.itemType,
+                "tier": item_model.itemTier,
+                "powerValue": item_model.stats.get("Power"),
+                "isEquipped": item_model.isEquipped,
+                "stats": item_model.stats,
+                "perks": item_model.perks,
+                "statDetails": [detail.model_dump() for detail in item_model.statDetails],
+            }
+            new_hash = compute_hash(json.dumps(content_payload, sort_keys=True, default=str))
+        except Exception:  # pragma: no cover - hashing best effort
+            new_hash = None
+
         item_obj.character_id = character_id
         item_obj.vault_id = vault_id
         item_obj.item_hash = item_hash
@@ -443,23 +461,15 @@ class VaultSentinelDBAgent:
         item_obj.power_value = item_model.stats.get("Power")
         item_obj.is_equipped = item_model.isEquipped
 
-        try:
-            content_payload = {
-                "itemHash": item_model.itemHash,
-                "name": item_model.itemName,
-                "type": item_model.itemType,
-                "tier": item_model.itemTier,
-                "stats": item_model.stats,
-                "perks": item_model.perks,
-                "statDetails": [detail.model_dump() for detail in item_model.statDetails],
-            }
-            item_obj.content_hash = compute_hash(json.dumps(content_payload, sort_keys=True, default=str))
-        except Exception:  # pragma: no cover - hashing best effort
-            pass
+        old_hash = item_obj.content_hash
+        if new_hash is not None:
+            item_obj.content_hash = new_hash
 
         session.add(item_obj)
         session.flush()
-        self._sync_item_children(session, item_obj, item_model, instance_id)
+        needs_refresh = (new_hash is None) or (old_hash != new_hash)
+        if needs_refresh:
+            self._sync_item_children(session, item_obj, item_model, instance_id)
         return item_obj
 
     def _sync_item_children(self, session, item_obj: Item, item_model, instance_id: int | None) -> None:
