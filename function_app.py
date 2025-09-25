@@ -30,6 +30,69 @@ from vault_assistant import VaultAssistant
 app = func.FunctionApp()
 assistant = VaultAssistant()
 
+_refresh_env = os.getenv("VAULT_REFRESH_INTERVAL_MINUTES")
+_default_refresh_minutes = 30
+
+def _compute_refresh_schedule() -> tuple[str | None, int | None]:
+    """Compute cron schedule and interval minutes from env var."""
+    if _refresh_env is None or not _refresh_env.strip():
+        return f"0 */{_default_refresh_minutes} * * * *", _default_refresh_minutes
+    try:
+        interval = int(_refresh_env.strip())
+    except ValueError:
+        logging.warning("Invalid VAULT_REFRESH_INTERVAL_MINUTES='%s'. Disabling timer.", _refresh_env)
+        return None, None
+    if interval < 0:
+        logging.info("Vault refresh timer disabled (interval %d).", interval)
+        return None, None
+    if interval == 0:
+        logging.warning("Interval 0 is not supported. Disabling timer.")
+        return None, None
+    if interval < 60:
+        return f"0 */{interval} * * * *", interval
+    hours = max(1, interval // 60)
+    return f"0 0 */{hours} * * *", interval
+
+_refresh_schedule, _refresh_interval_minutes = _compute_refresh_schedule()
+
+if _refresh_schedule:
+
+    @app.schedule(schedule=_refresh_schedule, arg_name="timer", run_on_startup=False, use_monitor=True)
+    def refresh_inventory(timer: func.TimerRequest) -> None:
+        """Periodic task to refresh Bungie data and persist decoded results."""
+        interval_env = os.getenv("VAULT_REFRESH_INTERVAL_MINUTES")
+        if interval_env:
+            try:
+                if int(interval_env) < 0:
+                    logging.info("Vault refresh timer skipped (runtime disabled).")
+                    return
+            except ValueError:
+                pass
+
+        logging.info("Vault refresh timer triggered.")
+        try:
+            _, status = assistant.get_vault()
+            if status != 200:
+                logging.warning("Timer refresh: get_vault returned status %s", status)
+            _, decode_status = assistant.decode_vault(include_perks=True)
+            if decode_status != 200:
+                logging.warning("Timer refresh: decode_vault returned status %s", decode_status)
+        except Exception as exc:  # pragma: no cover - background task best effort
+            logging.error("Timer refresh: Vault workflow failed: %s", exc, exc_info=True)
+
+        try:
+            _, status = assistant.get_characters()
+            if status != 200:
+                logging.warning("Timer refresh: get_characters returned status %s", status)
+            _, decode_status = assistant.decode_characters(include_perks=True)
+            if decode_status != 200:
+                logging.warning("Timer refresh: decode_characters returned status %s", decode_status)
+        except Exception as exc:  # pragma: no cover
+            logging.error("Timer refresh: Character workflow failed: %s", exc, exc_info=True)
+
+else:
+    logging.info("Vault refresh timer not registered (disabled).")
+
 def compress_response_if_requested(data: str, req: func.HttpRequest, status_code: int = 200) -> func.HttpResponse:
     """
     Compresses the response using gzip if the client requests it via Accept-Encoding header or query param.
