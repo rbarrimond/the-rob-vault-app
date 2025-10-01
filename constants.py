@@ -14,6 +14,7 @@ SQL_DATABASE = os.getenv("AZURE_SQL_DATABASE")
 SQL_DRIVER = os.getenv("AZURE_SQL_DRIVER", "ODBC Driver 18 for SQL Server")
 SQL_USER = os.getenv("AZURE_SQL_ADMIN_LOGIN")
 SQL_PASSWORD = os.getenv("AZURE_SQL_ADMIN_PASSWORD")
+SQL_DISABLE_ODBC_POOLING = os.getenv("SQL_DISABLE_ODBC_POOLING", "false").lower() in {"1", "true", "yes"}
 
 # API and Azure configuration constants
 BUNGIE_API_BASE = "https://www.bungie.net/Platform"

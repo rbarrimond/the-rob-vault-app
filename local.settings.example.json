@@ -16,7 +16,7 @@
     "AZURE_OPENAI_API_KEY": "<api-key>",
     "AZURE_OPENAI_DEPLOYMENT": "<deployment-name>",
     "AZURE_OPENAI_API_VERSION": "2025-04-14",
+    "SQL_DISABLE_ODBC_POOLING": "true",
     "WEBSITE_RUN_FROM_PACKAGE": "0"
   }
 }
-
