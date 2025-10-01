@@ -16,6 +16,8 @@ import time
 import urllib.parse
 from typing import Any, Dict
 
+import pyodbc
+
 from openai import AzureOpenAI
 from sqlalchemy import create_engine, orm, text
 from sqlalchemy.exc import OperationalError
@@ -24,7 +26,7 @@ from sqlalchemy.exc import TimeoutError as SaTimeoutError
 from constants import (
     OPENAI_API_KEY, OPENAI_API_VERSION, OPENAI_DEPLOYMENT,
     OPENAI_ENDPOINT, SQL_DATABASE, SQL_DRIVER, SQL_SERVER,
-    SQL_USER, SQL_PASSWORD
+    SQL_USER, SQL_PASSWORD, SQL_DISABLE_ODBC_POOLING
 )
 from helpers import compute_hash
 from models import (
@@ -100,6 +102,12 @@ class VaultSentinelDBAgent:
             return
 
         # Choose authentication method: SQL auth if user/password, else Managed Identity
+        pooling_segment = "Pooling=no;" if SQL_DISABLE_ODBC_POOLING else ""
+        if SQL_DISABLE_ODBC_POOLING:
+            try:
+                pyodbc.pooling = False
+            except Exception as exc:  # pragma: no cover - defensive
+                logging.warning("Failed to disable pyodbc pooling: %s", exc)
         if SQL_USER and SQL_PASSWORD:
             # Use the exact ODBC connection string as in the working test, URL-encoded for SQLAlchemy
             odbc_str = (
@@ -111,6 +119,7 @@ class VaultSentinelDBAgent:
                 "Encrypt=yes;"
                 "TrustServerCertificate=no;"
                 "Connection Timeout=30;"
+                f"{pooling_segment}"
             )
             sqlalchemy_url = "mssql+pyodbc:///?odbc_connect=" + urllib.parse.quote_plus(odbc_str)
             logging.info("Using SQL authentication for database connection.")
@@ -123,6 +132,7 @@ class VaultSentinelDBAgent:
                 "Encrypt=yes;"
                 "TrustServerCertificate=no;"
                 "Connection Timeout=30;"
+                f"{pooling_segment}"
             )
             sqlalchemy_url = "mssql+pyodbc:///?odbc_connect=" + urllib.parse.quote_plus(odbc_str)
             logging.info("Using Managed Identity for database connection.")
