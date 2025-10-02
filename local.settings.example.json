@@ -17,6 +17,7 @@
     "AZURE_OPENAI_DEPLOYMENT": "<deployment-name>",
     "AZURE_OPENAI_API_VERSION": "2025-04-14",
     "SQL_DISABLE_ODBC_POOLING": "true",
-    "WEBSITE_RUN_FROM_PACKAGE": "0"
+    "WEBSITE_RUN_FROM_PACKAGE": "0",
+    "LOG_LEVEL": "DEBUG"
   }
 }

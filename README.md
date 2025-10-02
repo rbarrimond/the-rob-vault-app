@@ -45,6 +45,28 @@ This app is designed to serve as a backend tool for my custom ChatGPT assistant,
 - `static/openapi.yaml` — OpenAPI spec for the app
 - `static/index.html` — Static HTML tool for the app
 
+## Logging (Local vs Production)
+
+The app uses Python's root logger so Azure Functions can automatically forward traces to Application Insights.
+
+**Production defaults:**
+
+- `host.json` sets `Information` level for all functions to control volume.
+- Application Insights sampling enabled (5 items/sec) to reduce ingestion cost.
+- Code bootstrap falls back to `LOG_LEVEL=INFO` when the env var is unset.
+
+**Local development adjustments:**
+
+- Set `LOG_LEVEL=DEBUG` in `local.settings.json` (not committed) to see verbose pagination, sizing, and diagnostic traces.
+- For temporary deep debugging in production, set App Setting `LOG_LEVEL=DEBUG` and (optionally) introduce a short‑lived host.json override for a single function (e.g., `Function.vault`). Revert after troubleshooting.
+
+**Changing verbosity order of precedence:**
+
+1. `host.json` `logging.logLevel` (host filter – anything below is dropped regardless of code level)
+2. `LOG_LEVEL` environment variable (Python root logger level)
+
+If logs seem missing at DEBUG, confirm the host-level filter isn't higher than the code-level.
+
 ## License
 
 This project is for personal and educational use. Not affiliated with Bungie.

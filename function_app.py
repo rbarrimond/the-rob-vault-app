@@ -27,6 +27,25 @@ import psutil
 
 from vault_assistant import VaultAssistant
 
+# NOTE: Logging bootstrap for Azure Functions
+# We intentionally configure root logging early so that:
+#  - Local development respects LOG_LEVEL (default DEBUG)
+#  - In Azure, Application Settings LOG_LEVEL can raise/lower verbosity
+#  - Avoid creating duplicate handlers if the host already attached one
+#  - Provide consistent, concise format for queryable logs in App Insights
+
+if not logging.getLogger().handlers:
+    # Determine desired level from env, fallback to INFO in production codebase.
+    _log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    _level = getattr(logging, _log_level_name, logging.INFO)
+    logging.basicConfig(
+        level=_level,
+        format="%(asctime)s %(levelname)-8s %(name)s %(message)s"
+    )
+else:
+    # Ensure level reflects environment override even if handler exists.
+    logging.getLogger().setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO))
+
 app = func.FunctionApp()
 assistant = VaultAssistant()
 
@@ -74,7 +93,7 @@ if _refresh_schedule:
             _, status = assistant.get_vault()
             if status != 200:
                 logging.warning("Timer refresh: get_vault returned status %s", status)
-            _, decode_status = assistant.decode_vault(include_perks=True)
+            _, decode_status = assistant.decode_vault(include_perks=True, force_refresh=True)
             if decode_status != 200:
                 logging.warning("Timer refresh: decode_vault returned status %s", decode_status)
         except Exception as exc:  # pragma: no cover - background task best effort
@@ -84,7 +103,7 @@ if _refresh_schedule:
             _, status = assistant.get_characters()
             if status != 200:
                 logging.warning("Timer refresh: get_characters returned status %s", status)
-            _, decode_status = assistant.decode_characters(include_perks=True)
+            _, decode_status = assistant.decode_characters(include_perks=True, force_refresh=True)
             if decode_status != 200:
                 logging.warning("Timer refresh: decode_characters returned status %s", decode_status)
         except Exception as exc:  # pragma: no cover
@@ -388,6 +407,7 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """
     logging.info("[vault/decoded] GET request received.")
     include_perks = req.params.get("includePerks", "false").lower() == "true"
+    force_refresh = req.params.get("forceRefresh", "false").lower() == "true"
     try:
         limit = req.params.get("limit")
         offset = req.params.get("offset")
@@ -396,7 +416,12 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     except Exception:
         return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
     try:
-        result, status = assistant.decode_vault(include_perks=include_perks, limit=limit, offset=offset)
+        result, status = assistant.decode_vault(
+            include_perks=include_perks,
+            limit=limit,
+            offset=offset,
+            force_refresh=force_refresh,
+        )
         response_json = json.dumps(result, indent=2)
         return compress_response_if_requested(response_json, req, status_code=status)
     except Exception as e:
@@ -417,6 +442,7 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """
     logging.info("[characters/decoded] GET request received.")
     include_perks = req.params.get("includePerks", "false").lower() == "true"
+    force_refresh = req.params.get("forceRefresh", "false").lower() == "true"
     try:
         limit = req.params.get("limit")
         offset = req.params.get("offset")
@@ -425,7 +451,12 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     except Exception:
         return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
     try:
-        result, status = assistant.decode_characters(include_perks=include_perks, limit=limit, offset=offset)
+        result, status = assistant.decode_characters(
+            include_perks=include_perks,
+            limit=limit,
+            offset=offset,
+            force_refresh=force_refresh,
+        )
         response_json = json.dumps(result, indent=2)
         return compress_response_if_requested(response_json, req, status_code=status)
     except Exception as e:
