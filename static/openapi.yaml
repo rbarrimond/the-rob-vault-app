@@ -99,6 +99,13 @@ paths:
           schema:
             type: boolean
           description: If true, response will be gzip-compressed regardless of Accept-Encoding header
+        - in: query
+          name: forceRefresh
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: If true, bypass cached decoded blobs and rebuild inventory before returning results
       responses:
         "200":
           description: Vault inventory returned
@@ -146,6 +153,13 @@ paths:
           schema:
             type: boolean
           description: If true, response will be gzip-compressed regardless of Accept-Encoding header
+        - in: query
+          name: forceRefresh
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: If true, bypass cached decoded blobs and rebuild vault inventory before returning results
       responses:
         "200":
           description: Decoded vault inventory
@@ -234,6 +248,13 @@ paths:
           schema:
             type: boolean
           description: If true, response will be gzip-compressed regardless of Accept-Encoding header
+        - in: query
+          name: forceRefresh
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: If true, bypass cached decoded blobs and rebuild character equipment before returning results
       responses:
         "200":
           description: Decoded character equipment

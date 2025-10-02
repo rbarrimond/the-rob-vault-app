@@ -432,7 +432,14 @@ class VaultAssistant:
                      len(blob_names), membership_id)
         return {"backups": blob_names}, 200
 
-    def decode_vault(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
+    def decode_vault(
+        self,
+        include_perks: bool = False,
+        limit: int = None,
+        offset: int = 0,
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[list, int]:
         """
         Decode the vault inventory using VaultModel.from_components for each item. Optionally include perks. Supports pagination.
 
@@ -444,6 +451,7 @@ class VaultAssistant:
             include_perks (bool): If True, include perks for each item.
             limit (int): Max number of items to return.
             offset (int): Number of items to skip.
+            force_refresh (bool): If True, bypass cached decoded blobs and rebuild data.
 
         Returns:
             tuple: (decoded items list, status_code)
@@ -458,7 +466,7 @@ class VaultAssistant:
 
         decoded_blob_name = f"{membership_id}-vault-decoded.json"
         date_last_played = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)[0]
-        if date_last_played:
+        if not force_refresh and date_last_played:
             blob_data = load_valid_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, date_last_played)
             if blob_data:
                 logging.info("Using cached decoded vault from blob for user: %s", membership_id)
@@ -516,7 +524,14 @@ class VaultAssistant:
                     decoded_blob_name, json.dumps(decoded_items))
         return decoded_items, 200
 
-    def decode_characters(self, include_perks: bool = False, limit: int = None, offset: int = 0) -> tuple[list, int]:
+    def decode_characters(
+        self,
+        include_perks: bool = False,
+        limit: int = None,
+        offset: int = 0,
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[list, int]:
         """
         Decode the character equipment using CharacterModel.from_components for each character. Optionally include perks. Supports pagination.
 
@@ -528,6 +543,7 @@ class VaultAssistant:
             include_perks (bool): If True, include perks for each item.
             limit (int): Max number of items to return per character.
             offset (int): Number of items to skip per character.
+            force_refresh (bool): If True, bypass cached decoded blobs and rebuild data.
 
         Returns:
             tuple: (decoded items list, status_code)
@@ -542,7 +558,7 @@ class VaultAssistant:
 
         decoded_blob_name = f"{membership_id}-characters-decoded.json"
         date_last_played = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)[0]
-        if date_last_played:
+        if not force_refresh and date_last_played:
             blob_data = load_valid_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, date_last_played)
             if blob_data is not None:
                 logging.info("Using cached decoded characters from blob for user: %s", membership_id)

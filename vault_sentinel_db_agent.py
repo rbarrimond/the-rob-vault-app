@@ -109,6 +109,11 @@ class VaultSentinelDBAgent:
             except Exception as exc:  # pragma: no cover - defensive
                 logging.warning("Failed to disable pyodbc pooling: %s", exc)
         if SQL_USER and SQL_PASSWORD:
+            logging.debug(
+                "SQL auth credentials loaded (user=%s, password_len=%s)",
+                SQL_USER,
+                len(SQL_PASSWORD) if SQL_PASSWORD else 0,
+            )
             # Use the exact ODBC connection string as in the working test, URL-encoded for SQLAlchemy
             odbc_str = (
                 f"DRIVER={{{SQL_DRIVER}}};"
@@ -220,10 +225,16 @@ class VaultSentinelDBAgent:
                 
                 # Check if this looks like a cold start issue
                 error_msg = str(e).lower()
-                is_cold_start = any(indicator in error_msg for indicator in [
-                    'login timeout', 'connection timeout', 'hyt00', 
-                    'server is not ready', 'database is starting'
-                ])
+                cold_start_indicators = [
+                    'login timeout',
+                    'connection timeout',
+                    'hyt00',
+                    'server is not ready',
+                    'database is starting',
+                    'not currently available',
+                    '40613',
+                ]
+                is_cold_start = any(indicator in error_msg for indicator in cold_start_indicators)
                 
                 if is_cold_start and attempt < max_attempts - 1:
                     delay = base_delay * (2 ** attempt)
