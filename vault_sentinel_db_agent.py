@@ -22,6 +22,7 @@ from openai import AzureOpenAI
 from sqlalchemy import create_engine, orm, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import TimeoutError as SaTimeoutError
+from sqlalchemy.pool import NullPool
 
 from constants import (
     OPENAI_API_KEY, OPENAI_API_VERSION, OPENAI_DEPLOYMENT,
@@ -143,21 +144,30 @@ class VaultSentinelDBAgent:
             logging.info("Using Managed Identity for database connection.")
 
         # Engine configuration optimized for Azure SQL cold starts
-        engine_config = {
-            "pool_pre_ping": True,      # Validate connections before use
-            "pool_recycle": 1800,       # Recycle connections every 30 minutes
-            "pool_timeout": 60,         # Extended pool timeout for cold starts
-            "max_overflow": 5,          # Conservative overflow for serverless
-            "pool_size": 2,             # Small pool size for serverless
-            "echo": False,              # Set to True for SQL debugging
-            "connect_args": {
-                "timeout": 60,          # Connection timeout
-                "autocommit": False     # Explicit transaction control
-            }
+        connect_kwargs = {
+            "timeout": 60,
+            "autocommit": False,
         }
 
         try:
-            self.engine = create_engine(sqlalchemy_url, **engine_config)
+            if SQL_DISABLE_ODBC_POOLING:
+                self.engine = create_engine(
+                    "mssql+pyodbc://",
+                    poolclass=NullPool,
+                    echo=False,
+                    creator=lambda: pyodbc.connect(odbc_str, **connect_kwargs),
+                )
+            else:
+                engine_config = {
+                    "pool_pre_ping": True,
+                    "pool_recycle": 1800,
+                    "pool_timeout": 60,
+                    "max_overflow": 5,
+                    "pool_size": 2,
+                    "echo": False,
+                    "connect_args": connect_kwargs,
+                }
+                self.engine = create_engine(sqlalchemy_url, **engine_config)
             self.Session = orm.sessionmaker(bind=self.engine)
             logging.info("SQLAlchemy engine/session initialized for Azure SQL DB.")
             # Attempt connection warmup in background
