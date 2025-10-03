@@ -716,7 +716,7 @@ class ItemEnergy(Base):
     SQLAlchemy ORM model representing energy details for an item instance.
     """
     __tablename__ = 'ItemEnergy'
-    instance_id = Column(BigInteger, primary_key=True)
+    instance_id = Column(BigInteger, primary_key=True, autoincrement=False)
     energy_type_hash = Column(BigInteger)
     energy_type_name = Column(String(50))
     capacity = Column(Integer)

@@ -538,8 +538,8 @@ class VaultSentinelDBAgent:
                     stat_value=stat_value
                 ))
 
-        session.query(ItemSocket).filter(ItemSocket.item_id == item_obj.item_id).delete(synchronize_session=False)
         session.query(ItemPlug).filter(ItemPlug.item_id == item_obj.item_id).delete(synchronize_session=False)
+        session.query(ItemSocket).filter(ItemSocket.item_id == item_obj.item_id).delete(synchronize_session=False)
         sockets = item_model.perks.get("sockets", []) or []
         for socket in sockets:
             socket_index = self._safe_int(socket.get("socketIndex"))
@@ -581,6 +581,7 @@ class VaultSentinelDBAgent:
                 ))
 
             session.query(ItemSocketChoice).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+            seen_choices: set[tuple[int, int]] = set()
             for choice in item_model.perks.get("reusablePlugs", []) or []:
                 socket_index = self._safe_int(choice.get("socketIndex"))
                 if socket_index is None:
@@ -589,6 +590,10 @@ class VaultSentinelDBAgent:
                     plug_hash = self._safe_int(plug.get("hash"))
                     if plug_hash is None:
                         continue
+                    key = (socket_index, plug_hash)
+                    if key in seen_choices:
+                        continue
+                    seen_choices.add(key)
                     session.add(ItemSocketChoice(
                         instance_id=instance_id,
                         socket_index=socket_index,
@@ -597,10 +602,16 @@ class VaultSentinelDBAgent:
                     ))
 
             session.query(ItemSandboxPerk).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+            seen_sandbox_perks: set[tuple[int, bool, bool]] = set()
             for perk in item_model.perks.get("sandboxPerks", []) or []:
                 perk_hash = self._safe_int(perk.get("hash"))
                 if perk_hash is None:
                     continue
+                key = (perk_hash, bool(perk.get("active", False)), bool(perk.get("visible", False)))
+                # Avoid duplicates within the same item payload
+                if key in seen_sandbox_perks:
+                    continue
+                seen_sandbox_perks.add(key)
                 session.add(ItemSandboxPerk(
                     instance_id=instance_id,
                     sandbox_perk_hash=perk_hash,
