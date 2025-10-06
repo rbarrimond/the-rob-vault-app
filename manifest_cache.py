@@ -184,6 +184,7 @@ class ManifestCache:
             "DestinySocketCategoryDefinition",
             "DestinyClassDefinition",
             "DestinyRaceDefinition",
+            "DestinyGenderDefinition",
         ]
         with self._lock:
             for t in small_types:

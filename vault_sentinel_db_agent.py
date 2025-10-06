@@ -42,6 +42,7 @@ from models import (
     User,
     Vault,
 )
+from manifest_cache import ManifestCache
 
 
 class VaultSentinelDBAgent:
@@ -51,6 +52,10 @@ class VaultSentinelDBAgent:
     """
 
     _instance = None
+    _definition_lock = threading.RLock()
+    _class_name_to_hash: dict[str, int] | None = None
+    _race_name_to_hash: dict[str, int] | None = None
+    _gender_name_to_hash: dict[str, int] | None = None
 
     @classmethod
     def instance(cls) -> "VaultSentinelDBAgent":
@@ -95,6 +100,57 @@ class VaultSentinelDBAgent:
         self.Session = None
         self._connection_warmed = False
         self._initialize_database_connection()
+
+    @classmethod
+    def _ensure_definition_maps(cls) -> None:
+        """Populate name->hash definition maps using manifest data when available."""
+        with cls._definition_lock:
+            if cls._race_name_to_hash is not None and cls._gender_name_to_hash is not None and cls._class_name_to_hash is not None:
+                return
+            try:
+                manifest = ManifestCache.instance()
+            except Exception as exc:  # pragma: no cover - manifest might be unavailable
+                logging.debug("Manifest unavailable for definition maps: %s", exc)
+                return
+
+            def build_map(def_type: str) -> dict[str, int]:
+                try:
+                    defs = manifest.get_all_definitions(def_type) or {}
+                except Exception as exc_inner:  # pragma: no cover - manifest errors handled gracefully
+                    logging.debug("Failed to build %s map: %s", def_type, exc_inner)
+                    return {}
+                mapping: dict[str, int] = {}
+                for hash_str, definition in defs.items():
+                    name = (definition or {}).get("displayProperties", {}).get("name")
+                    if not name:
+                        continue
+                    try:
+                        mapping[name] = int(hash_str)
+                    except (TypeError, ValueError):
+                        continue
+                return mapping
+
+            if cls._class_name_to_hash is None:
+                cls._class_name_to_hash = build_map("DestinyClassDefinition")
+            if cls._race_name_to_hash is None:
+                cls._race_name_to_hash = build_map("DestinyRaceDefinition")
+            if cls._gender_name_to_hash is None:
+                cls._gender_name_to_hash = build_map("DestinyGenderDefinition")
+
+    @classmethod
+    def class_name_map(cls) -> dict[str, int]:
+        cls._ensure_definition_maps()
+        return cls._class_name_to_hash or {}
+
+    @classmethod
+    def race_name_map(cls) -> dict[str, int]:
+        cls._ensure_definition_maps()
+        return cls._race_name_to_hash or {}
+
+    @classmethod
+    def gender_name_map(cls) -> dict[str, int]:
+        cls._ensure_definition_maps()
+        return cls._gender_name_to_hash or {}
 
     def _initialize_database_connection(self):
         """Initialize database connection optimized for Azure SQL Database cold starts."""
@@ -602,23 +658,34 @@ class VaultSentinelDBAgent:
                     ))
 
             session.query(ItemSandboxPerk).filter_by(instance_id=instance_id).delete(synchronize_session=False)
-            seen_sandbox_perks: set[tuple[int, bool, bool]] = set()
+            perk_records: dict[int, dict] = {}
             for perk in item_model.perks.get("sandboxPerks", []) or []:
                 perk_hash = self._safe_int(perk.get("hash"))
                 if perk_hash is None:
                     continue
-                key = (perk_hash, bool(perk.get("active", False)), bool(perk.get("visible", False)))
-                # Avoid duplicates within the same item payload
-                if key in seen_sandbox_perks:
-                    continue
-                seen_sandbox_perks.add(key)
+                current = perk_records.get(perk_hash)
+                candidate = {
+                    "name": perk.get("name"),
+                    "icon": perk.get("icon"),
+                    "is_active": bool(perk.get("active", False)),
+                    "is_visible": bool(perk.get("visible", False)),
+                }
+                if current:
+                    # Prefer records that are active; if active state matches, keep visible ones
+                    if current["is_active"] and not candidate["is_active"]:
+                        continue
+                    if current["is_active"] == candidate["is_active"] and current["is_visible"]:
+                        continue
+                perk_records[perk_hash] = candidate
+
+            for perk_hash, data in perk_records.items():
                 session.add(ItemSandboxPerk(
                     instance_id=instance_id,
                     sandbox_perk_hash=perk_hash,
-                    name=perk.get("name"),
-                    icon=perk.get("icon"),
-                    is_active=bool(perk.get("active", False)),
-                    is_visible=bool(perk.get("visible", False))
+                    name=data["name"],
+                    icon=data["icon"],
+                    is_active=data["is_active"],
+                    is_visible=data["is_visible"],
                 ))
 
     def persist_vault(self, vault_model, membership_id, membership_type):
@@ -676,6 +743,7 @@ class VaultSentinelDBAgent:
             return {"status": "error", "error": str(e)}
             
         try:
+            self._ensure_definition_maps()
             user_obj = self._get_or_create_user(session, membership_id, membership_type)
             for char_model in character_models:
                 character_id = self._safe_int(char_model.charId)
@@ -688,7 +756,12 @@ class VaultSentinelDBAgent:
                 char_obj.user_id = user_obj.user_id
                 char_obj.class_type = char_model.classType
                 char_obj.light = self._safe_int(char_model.light)
-                char_obj.race_hash = self._safe_int(char_model.race)
+                race_hash = None
+                if char_model.race and self._race_name_to_hash:
+                    race_hash = self._race_name_to_hash.get(char_model.race)
+                if race_hash is None:
+                    race_hash = self._safe_int(char_model.race)
+                char_obj.race_hash = race_hash
                 session.add(char_obj)
                 session.flush()
 

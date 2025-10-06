@@ -568,7 +568,7 @@ class Character(Base):
     SQLAlchemy ORM model representing a Destiny 2 character belonging to a user.
     """
     __tablename__ = 'Characters'
-    character_id = Column(BigInteger, primary_key=True)
+    character_id = Column(BigInteger, primary_key=True, autoincrement=False)
     user_id = Column(BigInteger, ForeignKey('Users.user_id'), nullable=False)
     class_type = Column(String(50))
     light = Column(Integer)
