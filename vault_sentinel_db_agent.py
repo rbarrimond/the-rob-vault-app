@@ -688,7 +688,6 @@ class VaultSentinelDBAgent:
             return {"status": "error", "error": str(e)}
             
         try:
-            self._ensure_definition_maps()
             user_obj = self._get_or_create_user(session, membership_id, membership_type)
             for char_model in character_models:
                 character_id = self._safe_int(char_model.charId)
