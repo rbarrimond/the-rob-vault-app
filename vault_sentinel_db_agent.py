@@ -42,7 +42,7 @@ from models import (
     User,
     Vault,
 )
-from manifest_cache import ManifestCache
+from manifest_identity import race_name_to_hash
 
 
 class VaultSentinelDBAgent:
@@ -52,10 +52,6 @@ class VaultSentinelDBAgent:
     """
 
     _instance = None
-    _definition_lock = threading.RLock()
-    _class_name_to_hash: dict[str, int] | None = None
-    _race_name_to_hash: dict[str, int] | None = None
-    _gender_name_to_hash: dict[str, int] | None = None
 
     @classmethod
     def instance(cls) -> "VaultSentinelDBAgent":
@@ -100,57 +96,6 @@ class VaultSentinelDBAgent:
         self.Session = None
         self._connection_warmed = False
         self._initialize_database_connection()
-
-    @classmethod
-    def _ensure_definition_maps(cls) -> None:
-        """Populate name->hash definition maps using manifest data when available."""
-        with cls._definition_lock:
-            if cls._race_name_to_hash is not None and cls._gender_name_to_hash is not None and cls._class_name_to_hash is not None:
-                return
-            try:
-                manifest = ManifestCache.instance()
-            except Exception as exc:  # pragma: no cover - manifest might be unavailable
-                logging.debug("Manifest unavailable for definition maps: %s", exc)
-                return
-
-            def build_map(def_type: str) -> dict[str, int]:
-                try:
-                    defs = manifest.get_all_definitions(def_type) or {}
-                except Exception as exc_inner:  # pragma: no cover - manifest errors handled gracefully
-                    logging.debug("Failed to build %s map: %s", def_type, exc_inner)
-                    return {}
-                mapping: dict[str, int] = {}
-                for hash_str, definition in defs.items():
-                    name = (definition or {}).get("displayProperties", {}).get("name")
-                    if not name:
-                        continue
-                    try:
-                        mapping[name] = int(hash_str)
-                    except (TypeError, ValueError):
-                        continue
-                return mapping
-
-            if cls._class_name_to_hash is None:
-                cls._class_name_to_hash = build_map("DestinyClassDefinition")
-            if cls._race_name_to_hash is None:
-                cls._race_name_to_hash = build_map("DestinyRaceDefinition")
-            if cls._gender_name_to_hash is None:
-                cls._gender_name_to_hash = build_map("DestinyGenderDefinition")
-
-    @classmethod
-    def class_name_map(cls) -> dict[str, int]:
-        cls._ensure_definition_maps()
-        return cls._class_name_to_hash or {}
-
-    @classmethod
-    def race_name_map(cls) -> dict[str, int]:
-        cls._ensure_definition_maps()
-        return cls._race_name_to_hash or {}
-
-    @classmethod
-    def gender_name_map(cls) -> dict[str, int]:
-        cls._ensure_definition_maps()
-        return cls._gender_name_to_hash or {}
 
     def _initialize_database_connection(self):
         """Initialize database connection optimized for Azure SQL Database cold starts."""
@@ -757,8 +702,8 @@ class VaultSentinelDBAgent:
                 char_obj.class_type = char_model.classType
                 char_obj.light = self._safe_int(char_model.light)
                 race_hash = None
-                if char_model.race and self._race_name_to_hash:
-                    race_hash = self._race_name_to_hash.get(char_model.race)
+                if char_model.race:
+                    race_hash = race_name_to_hash().get(char_model.race)
                 if race_hash is None:
                     race_hash = self._safe_int(char_model.race)
                 char_obj.race_hash = race_hash
