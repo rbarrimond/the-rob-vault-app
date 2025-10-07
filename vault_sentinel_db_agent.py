@@ -1,10 +1,10 @@
-#pylint: disable=broad-except, invalid-name, line-too-long
+#pylint: disable=invalid-name, line-too-long
 """
 Vault Sentinel DB Agent for Azure AI
 ------------------------------------
-Implements a secure, schema-compliant agent that processes Destiny 2 gear queries using Azure AI. 
-All queries must conform to the embedded schema. Uses Managed Identity for authentication and follows 
-Azure best practices for reliability, security, and performance.
+This module implements a secure, schema-compliant agent that processes Destiny 2 gear queries using Azure AI. 
+All queries must conform to the embedded schema. The agent uses Managed Identity for authentication and adheres 
+to Azure best practices for reliability, security, and performance.
 """
 
 
@@ -19,8 +19,15 @@ from typing import Any, Dict
 import pyodbc
 
 from openai import AzureOpenAI
+from openai import (
+    APIError,
+    APIConnectionError,
+    APITimeoutError,
+    RateLimitError,
+    BadRequestError,
+)
 from sqlalchemy import create_engine, orm, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SaTimeoutError
 from sqlalchemy.pool import NullPool
 
@@ -47,15 +54,21 @@ from manifest_identity import race_name_to_hash
 
 class VaultSentinelDBAgent:
     """
-    Business logic agent for Destiny 2 gear queries, designed for use in Azure Function App endpoints.
-    Implements schema validation and core query processing logic with Azure SQL cold start mitigation.
+    A business logic agent for processing Destiny 2 gear queries, designed for use in Azure Function App endpoints.
+
+    This class implements schema validation, core query processing logic, and Azure SQL cold start mitigation.
     """
 
     _instance = None
 
     @classmethod
     def instance(cls) -> "VaultSentinelDBAgent":
-        """Thread-safe singleton factory for the DB agent."""
+        """
+        Provides a thread-safe singleton instance of the DB agent.
+
+        Returns:
+            VaultSentinelDBAgent: The singleton instance of the DB agent.
+        """
         if not hasattr(cls, "_instance_lock"):
             cls._instance_lock = threading.RLock()
         if cls._instance is None:
@@ -66,7 +79,9 @@ class VaultSentinelDBAgent:
 
     @classmethod
     def reset_instance(cls) -> None:
-        """Reset the singleton instance (useful for tests)."""
+        """
+        Resets the singleton instance. Useful for testing purposes.
+        """
         if hasattr(cls, "_instance_lock"):
             with cls._instance_lock:
                 cls._instance = None
@@ -75,10 +90,18 @@ class VaultSentinelDBAgent:
 
     @classmethod
     def is_db_configured(cls) -> bool:
-        """Quick check to see if minimal DB config constants are set without constructing the agent."""
+        """
+        Checks if the minimal database configuration constants are set.
+
+        Returns:
+            bool: True if the database is configured, False otherwise.
+        """
         return bool(SQL_SERVER and SQL_DATABASE and SQL_DRIVER)
 
     def __init__(self):
+        """
+        Initializes the VaultSentinelDBAgent, setting up Azure OpenAI and SQLAlchemy configurations.
+        """
         logging.info("VaultSentinelDBAgent initialized.")
         # Azure OpenAI Chat Completions client
         self.chat_client = None
@@ -98,7 +121,9 @@ class VaultSentinelDBAgent:
         self._initialize_database_connection()
 
     def _initialize_database_connection(self):
-        """Initialize database connection optimized for Azure SQL Database cold starts."""
+        """
+        Initializes the database connection optimized for Azure SQL Database cold starts.
+        """
         if not (SQL_SERVER and SQL_DATABASE and SQL_DRIVER):
             logging.error("SQL_SERVER, SQL_DATABASE, or SQL_DRIVER constant not set.")
             return
@@ -108,7 +133,7 @@ class VaultSentinelDBAgent:
         if SQL_DISABLE_ODBC_POOLING:
             try:
                 pyodbc.pooling = False
-            except Exception as exc:  # pragma: no cover - defensive
+            except AttributeError as exc:  # pragma: no cover - defensive
                 logging.warning("Failed to disable pyodbc pooling: %s", exc)
         if SQL_USER and SQL_PASSWORD:
             logging.debug(
@@ -173,13 +198,15 @@ class VaultSentinelDBAgent:
             logging.info("SQLAlchemy engine/session initialized for Azure SQL DB.")
             # Attempt connection warmup in background
             self._warmup_connection()
-        except Exception as e:
+        except (SQLAlchemyError, pyodbc.Error) as e:
             logging.error("Failed to initialize SQLAlchemy engine: %s", e)
             self.engine = None
             self.Session = None
 
     def _warmup_connection(self):
-        """Warm up the database connection to mitigate cold start issues."""
+        """
+        Warms up the database connection to mitigate cold start issues.
+        """
         if not self.Session:
             return
             
@@ -207,14 +234,22 @@ class VaultSentinelDBAgent:
                 if attempt < max_warmup_attempts - 1:
                     time.sleep(warmup_delay)
                     warmup_delay *= 2
-            except Exception as e:
-                logging.error("Unexpected error during database warmup: %s", e)
+            except (SQLAlchemyError, pyodbc.Error) as e:
+                logging.error("Unexpected database error during warmup: %s", e)
                 break
         
         logging.warning("Database warmup incomplete - connection may experience cold start delays.")
 
     def _get_session_with_cold_start_handling(self):
-        """Get a database session with Azure SQL cold start mitigation."""
+        """
+        Retrieves a database session with Azure SQL cold start mitigation.
+
+        Returns:
+            sqlalchemy.orm.Session: A SQLAlchemy session object.
+
+        Raises:
+            RuntimeError: If the session cannot be created after multiple attempts.
+        """
         if not self.Session:
             raise RuntimeError("Database session not available")
         
@@ -258,7 +293,7 @@ class VaultSentinelDBAgent:
                 else:
                     raise RuntimeError(f"Database session failed after {attempt + 1} attempts: {e}") from e
                     
-            except Exception as e:
+            except (SQLAlchemyError, pyodbc.Error) as e:
                 if session:
                     session.close()
                 raise RuntimeError(f"Unexpected database error: {e}") from e
@@ -267,7 +302,13 @@ class VaultSentinelDBAgent:
 
     def validate_query(self, query: Dict[str, Any]) -> bool:
         """
-        Validate query against the embedded schema and ensure no required key is None/null or empty if a data structure.
+        Validates a query against the embedded schema, ensuring all required keys are present and valid.
+
+        Args:
+            query (Dict[str, Any]): The query to validate.
+
+        Returns:
+            bool: True if the query is valid, False otherwise.
         """
         required_keys = ["intent", "filters", "output", "sort", "limit"]
         for key in required_keys:
@@ -354,9 +395,22 @@ class VaultSentinelDBAgent:
             finally:
                 session.close()
                 
-        except Exception as e:
-            logging.error("process_query failed: %s", e)
+        except BadRequestError as e:
+            logging.error("Azure OpenAI bad request: %s", e)
+            return {"status": "error", "error": "Azure OpenAI bad request. Check prompt/schema and inputs."}
+        except RateLimitError as e:
+            logging.warning("Azure OpenAI rate limit: %s", e)
+            return {"status": "error", "error": "Azure OpenAI rate limit exceeded. Please retry shortly."}
+        except (APIConnectionError, APITimeoutError) as e:
+            logging.error("Azure OpenAI network/timeout error: %s", e)
+            return {"status": "error", "error": "Azure OpenAI network or timeout error. Please try again."}
+        except APIError as e:
+            logging.error("Azure OpenAI service error: %s", e)
+            return {"status": "error", "error": "Azure OpenAI service error. Try again later."}
+        except (SQLAlchemyError, pyodbc.Error, ValueError) as e:
+            logging.error("process_query DB/validation error: %s", e)
             return {"status": "error", "error": str(e)}
+        # Let unexpected errors (e.g., OpenAI SDK) propagate to the caller
 
     # --- SQL Validation ---
     _ALLOWED_TABLES = {
@@ -480,7 +534,7 @@ class VaultSentinelDBAgent:
                 "statDetails": [detail.model_dump() for detail in item_model.statDetails],
             }
             new_hash = compute_hash(json.dumps(content_payload, sort_keys=True, default=str))
-        except Exception:  # pragma: no cover - hashing best effort
+        except (TypeError, ValueError):  # pragma: no cover - hashing best effort
             new_hash = None
 
         item_obj.character_id = character_id
@@ -664,7 +718,7 @@ class VaultSentinelDBAgent:
                     self._delete_item(session, db_item)
             session.commit()
             return {"status": "success"}
-        except Exception as e:
+        except (SQLAlchemyError, pyodbc.Error) as e:
             session.rollback()
             logging.error("Failed to persist vault: %s", e)
             return {"status": "error", "error": str(e)}
@@ -721,7 +775,7 @@ class VaultSentinelDBAgent:
                         self._delete_item(session, db_item)
             session.commit()
             return {"status": "success"}
-        except Exception as e:
+        except (SQLAlchemyError, pyodbc.Error) as e:
             session.rollback()
             logging.error("Failed to persist characters: %s", e)
             return {"status": "error", "error": str(e)}
@@ -748,7 +802,7 @@ class VaultSentinelDBAgent:
             self._persist_item_record(session, item_model, character_id=character_id, vault_id=vault_id)
             session.commit()
             return {"status": "success"}
-        except Exception as e:
+        except (SQLAlchemyError, pyodbc.Error) as e:
             session.rollback()
             logging.error("Failed to persist item: %s", e)
             return {"status": "error", "error": str(e)}
@@ -777,5 +831,5 @@ if __name__ == "__main__":
     try:
         result = agent.process_query(sample_query)
         print(result)
-    except Exception as exc:
+    except (SQLAlchemyError, pyodbc.Error, ValueError) as exc:
         logging.error("Error processing query: %s", exc)

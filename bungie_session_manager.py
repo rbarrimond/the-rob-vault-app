@@ -1,4 +1,4 @@
-#pylint: disable=broad-except, line-too-long
+#pylint: disable=line-too-long
 """
 BungieSessionManager: Handles OAuth authentication, token refresh, and session management for Destiny 2 Vault Assistant.
 
@@ -110,11 +110,17 @@ class BungieSessionManager:
             entity = self._session_cache
         if not entity:
             return True
-        expires_in = int(entity.get("ExpiresIn", "3600"))
+        try:
+            expires_in = int(entity.get("ExpiresIn", "3600"))
+        except (TypeError, ValueError):
+            expires_in = 3600
         issued_at = entity.get("IssuedAt")
         if not issued_at:
             return True
-        issued_at_dt = datetime.strptime(issued_at, "%Y-%m-%dT%H:%M:%S")
+        try:
+            issued_at_dt = datetime.strptime(issued_at, "%Y-%m-%dT%H:%M:%S")
+        except (TypeError, ValueError):
+            return True
         now = datetime.utcnow()
         elapsed = (now - issued_at_dt).total_seconds()
         return elapsed > (expires_in - self._token_expiry_margin)
@@ -137,17 +143,23 @@ class BungieSessionManager:
             # Token expired, refresh from Bungie API
             refresh_token_val = entity.get("RefreshToken")
             if refresh_token_val:
-                token_data, _ = self.refresh_token(refresh_token_val)
-                entity.update({
-                    "AccessToken": token_data.get("access_token", ""),
-                    "RefreshToken": token_data.get("refresh_token", ""),
-                    "ExpiresIn": str(token_data.get("expires_in", "3600")),
-                    "IssuedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-                })
-                table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
-                table_client = table_service.get_table_client(self.table_name)
-                table_client.upsert_entity(entity=entity)
-                self._session_cache = entity
+                try:
+                    token_data, _ = self.refresh_token(refresh_token_val)
+                    entity.update({
+                        "AccessToken": token_data.get("access_token", ""),
+                        "RefreshToken": token_data.get("refresh_token", ""),
+                        "ExpiresIn": str(token_data.get("expires_in", "3600")),
+                        "IssuedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+                    })
+                    table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
+                    table_client = table_service.get_table_client(self.table_name)
+                    try:
+                        table_client.upsert_entity(entity=entity)
+                    except AzureError as e:
+                        logging.warning("[session] Azure Table upsert failed during refresh: %s", e)
+                    self._session_cache = entity
+                except (requests.RequestException, AzureError, KeyError, ValueError) as e:
+                    logging.error("[session] Token refresh failed; using cached entity if available: %s", e)
         else:
             # Token is valid, just use cache
             self._session_cache = entity
@@ -209,8 +221,11 @@ class BungieSessionManager:
             "membershipType": membership_type_val,
             "IssuedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         }
-        table_client.upsert_entity(entity=token_entity)
-        logging.info("[session] Token data stored in table storage for session.")
+        try:
+            table_client.upsert_entity(entity=token_entity)
+            logging.info("[session] Token data stored in table storage for session.")
+        except AzureError as e:
+            logging.warning("[session] Azure Table error on upsert_entity: %s", e)
         # Update in-memory cache after token exchange
         self._session_cache = token_entity
         return token_data
@@ -285,7 +300,12 @@ class BungieSessionManager:
             requests.get, profile_url, headers=headers_profile, timeout=self.timeout)
         if not profile_resp.ok:
             return None
-        profile_data = profile_resp.json().get("Response", {})
+        try:
+            profile_root = profile_resp.json()
+        except ValueError as e:
+            logging.warning("[session] Invalid JSON in membership profile response: %s", e)
+            return None
+        profile_data = profile_root.get("Response", {})
         if not profile_data.get("destinyMemberships"):
             return None
         membership = profile_data["destinyMemberships"][0]

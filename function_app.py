@@ -1,4 +1,4 @@
-# pylint: disable=invalid-name, broad-except, line-too-long, unused-argument
+# pylint: disable=invalid-name, line-too-long, unused-argument
 """
 Azure Function App for Destiny 2 Vault Assistant.
 
@@ -13,6 +13,7 @@ All endpoints return JSON or HTML responses suitable for web and API clients.
 """
 
 import base64
+import binascii
 import json
 import logging
 import os
@@ -24,6 +25,9 @@ from io import BytesIO
 
 import azure.functions as func
 import psutil
+from requests.exceptions import RequestException
+from sqlalchemy.exc import SQLAlchemyError
+import pyodbc
 
 from vault_assistant import VaultAssistant
 
@@ -96,7 +100,7 @@ if _refresh_schedule:
             _, decode_status = assistant.decode_vault(include_perks=True, force_refresh=True)
             if decode_status != 200:
                 logging.warning("Timer refresh: decode_vault returned status %s", decode_status)
-        except Exception as exc:  # pragma: no cover - background task best effort
+        except (RuntimeError, RequestException, SQLAlchemyError, pyodbc.Error, ValueError, KeyError) as exc:  # pragma: no cover - background task best effort
             logging.error("Timer refresh: Vault workflow failed: %s", exc, exc_info=True)
 
         try:
@@ -106,7 +110,7 @@ if _refresh_schedule:
             _, decode_status = assistant.decode_characters(include_perks=True, force_refresh=True)
             if decode_status != 200:
                 logging.warning("Timer refresh: decode_characters returned status %s", decode_status)
-        except Exception as exc:  # pragma: no cover
+        except (RuntimeError, RequestException, SQLAlchemyError, pyodbc.Error, ValueError, KeyError) as exc:  # pragma: no cover
             logging.error("Timer refresh: Character workflow failed: %s", exc, exc_info=True)
 
 else:
@@ -173,7 +177,7 @@ def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
             }
         }
         return func.HttpResponse(json.dumps(diagnostics, indent=2), mimetype="application/json", status_code=200)
-    except Exception as e:
+    except (psutil.Error, OSError) as e:
         return func.HttpResponse(json.dumps({"status": "error", "error": str(e)}), mimetype="application/json", status_code=500)
 
 
@@ -200,7 +204,7 @@ def auth(req: func.HttpRequest) -> func.HttpResponse:
         token_data = assistant.exchange_code_for_token(code)
         logging.info(
             "[auth] Successfully exchanged code for tokens and stored session.")
-    except Exception as e:
+    except (RequestException, ValueError, KeyError, RuntimeError) as e:
         logging.error("[auth] Token exchange failed: %s", e)
         return func.HttpResponse("OAuth token exchange failed.", status_code=500)
     html_content = f"""
@@ -266,7 +270,7 @@ def get_session(req: func.HttpRequest) -> func.HttpResponse:
     try:
         session_data = assistant.get_session()
         return func.HttpResponse(json.dumps(session_data, indent=2), mimetype="application/json")
-    except Exception as e:
+    except (RuntimeError, KeyError) as e:
         logging.error("[session] Failed to get session data: %s", e)
         return func.HttpResponse("Failed to get session data.", status_code=500)
 
@@ -284,7 +288,7 @@ def session_token(req: func.HttpRequest) -> func.HttpResponse:
     try:
         result, status_code = assistant.get_session_token()
         return func.HttpResponse(json.dumps(result, indent=2), status_code=status_code, mimetype="application/json")
-    except Exception as e:
+    except (RuntimeError, KeyError) as e:
         logging.error("[session/token] Failed to get session token: %s", e)
         return func.HttpResponse("Failed to get session token.", status_code=500)
 
@@ -310,7 +314,7 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
         token_data, _ = assistant.refresh_token(refresh_token_val)
         logging.info("[token/refresh] Successfully refreshed token.")
         return func.HttpResponse(json.dumps({"access_token": token_data["access_token"]}), mimetype="application/json")
-    except Exception as e:
+    except (RuntimeError, KeyError, ValueError) as e:
         logging.error("Token refresh failed: %s", e)
         return func.HttpResponse("Failed to refresh token.", status_code=500)
 
@@ -334,7 +338,7 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
         offset = req.params.get("offset")
         limit = int(limit) if limit is not None else None
         offset = int(offset) if offset is not None else 0
-    except Exception:
+    except (ValueError, TypeError):
         return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
     inventory, status = assistant.get_vault()
     if inventory is None:
@@ -367,7 +371,7 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
         offset = req.params.get("offset")
         limit = int(limit) if limit is not None else None
         offset = int(offset) if offset is not None else 0
-    except Exception:
+    except (ValueError, TypeError):
         return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
     equipment, status = assistant.get_characters()
     if equipment is None:
@@ -413,7 +417,7 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
         offset = req.params.get("offset")
         limit = int(limit) if limit is not None else None
         offset = int(offset) if offset is not None else 0
-    except Exception:
+    except (ValueError, TypeError):
         return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
     try:
         result, status = assistant.decode_vault(
@@ -424,7 +428,7 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
         )
         response_json = json.dumps(result, indent=2)
         return compress_response_if_requested(response_json, req, status_code=status)
-    except Exception as e:
+    except (RequestException, ValueError, RuntimeError, KeyError) as e:
         logging.error("[vault/decoded] Failed to decode vault: %s", e)
         return func.HttpResponse("Failed to decode vault.", status_code=500)
 
@@ -448,7 +452,7 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
         offset = req.params.get("offset")
         limit = int(limit) if limit is not None else None
         offset = int(offset) if offset is not None else 0
-    except Exception:
+    except (ValueError, TypeError):
         return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
     try:
         result, status = assistant.decode_characters(
@@ -459,7 +463,7 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
         )
         response_json = json.dumps(result, indent=2)
         return compress_response_if_requested(response_json, req, status_code=status)
-    except Exception as e:
+    except (RequestException, ValueError, RuntimeError, KeyError) as e:
         logging.error("[characters/decoded] Failed to decode character equipment: %s", e)
         return func.HttpResponse("Failed to decode character equipment.", status_code=500)
 
@@ -483,7 +487,7 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     try:
         hash_str = str(hash_val)
         int(hash_val)
-    except Exception:
+    except (ValueError, TypeError):
         return func.HttpResponse("'hash' must be an integer.", status_code=400)
     type_val = req.params.get("type")
     definition_data, status = assistant.get_manifest_item(hash_str, type_val)
@@ -518,7 +522,7 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
             membership_id, dim_backup_data)
         logging.info("[dim/backup] DIM backup saved successfully.")
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
-    except Exception as e:
+    except (ValueError, KeyError, RuntimeError) as e:
         logging.error("[dim/backup] Error: %s", e)
         return func.HttpResponse("Failed to save DIM backup", status_code=500)
 
@@ -544,7 +548,7 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
         result, _ = assistant.list_dim_backups(membership_id)
         logging.info("[dim/list] Successfully retrieved DIM backups.")
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json")
-    except Exception as e:
+    except (RuntimeError, KeyError, ValueError) as e:
         logging.error("[dim/list] Error: %s", e)
         return func.HttpResponse("Failed to list DIM backups", status_code=500)
 
@@ -562,13 +566,13 @@ def query_agent(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("[query] POST request received.")
     try:
         query = req.get_json()
-    except Exception as e:
+    except ValueError as e:
         logging.error("[query] Invalid JSON: %s", e)
         return func.HttpResponse(json.dumps({"error": "Invalid JSON"}), status_code=400, mimetype="application/json")
     try:
         result = assistant.process_query(query)
         return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=200)
-    except Exception as e:
+    except (RuntimeError, ValueError, KeyError) as e:
         logging.error("[query] Agent error: %s", e)
         return func.HttpResponse(json.dumps({"error": str(e)}), status_code=400, mimetype="application/json")
 
@@ -615,7 +619,7 @@ def save_object(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("[save] POST request received.")
     try:
         body = req.get_json()
-    except Exception:
+    except ValueError:
         body = None
     if not body:
         return func.HttpResponse(json.dumps({"error": "Missing request body"}), status_code=400, mimetype="application/json")
@@ -633,7 +637,7 @@ def save_object(req: func.HttpRequest) -> func.HttpResponse:
     if encoding == "base64":
         try:
             content = base64.b64decode(content)
-        except Exception as e:
+        except (binascii.Error, TypeError, ValueError) as e:
             return func.HttpResponse(json.dumps({"error": f"Base64 decode failed: {e}"}), status_code=400, mimetype="application/json")
     elif encoding == "utf-8" or encoding is None:
         if isinstance(content, str):

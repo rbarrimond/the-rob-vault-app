@@ -1,4 +1,4 @@
-# pylint: disable=broad-exception-caught, line-too-long
+# pylint: disable=line-too-long
 """
 ManifestCache module for Destiny 2 manifest management.
 
@@ -166,7 +166,7 @@ class ManifestCache:
                 self._conn.execute("PRAGMA temp_store=MEMORY;")
                 self._conn.execute("PRAGMA cache_size=-32768;")    # ~32MB page cache
                 self._conn.execute("PRAGMA mmap_size=134217728;")  # 128MB mmap if supported
-            except Exception:
+            except sqlite3.Error:
                 pass
             return self._conn
 
@@ -190,7 +190,7 @@ class ManifestCache:
             for t in small_types:
                 try:
                     self._small_defs[t] = self.get_all_definitions(t)  # full-table read (small only)
-                except Exception:
+                except (sqlite3.Error, ValueError, TypeError, json.JSONDecodeError):
                     continue
 
     def get_definitions_batch(self, definition_type: str, item_hashes: list[int | str]) -> dict[str, dict]:
@@ -214,7 +214,7 @@ class ManifestCache:
         for h in item_hashes:
             try:
                 norm = int(normalize_item_hash(h))
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             if norm in seen:
                 continue
@@ -238,9 +238,9 @@ class ManifestCache:
                         try:
                             uid = int(row[0]) & 0xFFFFFFFF
                             out[str(uid)] = json.loads(row[1])
-                        except Exception:
+                        except (json.JSONDecodeError, ValueError, TypeError):
                             continue
-                except Exception as e:
+                except sqlite3.Error as e:
                     logging.error("Batch manifest lookup failed for %s (%d ids): %s", definition_type, len(params), e)
         return out
 
@@ -258,7 +258,7 @@ class ManifestCache:
         """
         try:
             norm = int(normalize_item_hash(item_hash))
-        except Exception:
+        except (TypeError, ValueError):
             return None
         memo = self._memo[definition_type]
         key = str(norm)
@@ -279,7 +279,7 @@ class ManifestCache:
                     result = json.loads(row[0])
                     memo[key] = result
                     return result
-            except Exception as e:
+            except (sqlite3.Error, json.JSONDecodeError, ValueError) as e:
                 logging.error("Manifest lookup failed for %s (u32=%s, i32=%s): %s", definition_type, norm, signed_hash, e)
         return None
 
@@ -301,7 +301,7 @@ class ManifestCache:
         for h in hashes:
             try:
                 norm = int(normalize_item_hash(h))
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             norm_hashes.append(norm)
             if str(norm) not in memo:
@@ -339,9 +339,9 @@ class ManifestCache:
                     try:
                         uid = int(row[0]) & 0xFFFFFFFF
                         defs[str(uid)] = json.loads(row[1])
-                    except Exception:
+                    except (json.JSONDecodeError, ValueError, TypeError):
                         continue
-            except Exception as e:
+            except sqlite3.Error as e:
                 logging.error("Manifest get_all_definitions failed for %s: %s", definition_type, e)
         return defs
 
@@ -378,7 +378,7 @@ class ManifestCache:
                     row = cursor.fetchone()
                     if row:
                         return json.loads(row[0])
-                except Exception as e:
+                except (sqlite3.Error, json.JSONDecodeError, ValueError) as e:
                     logging.error(
                         "Manifest lookup failed for %s (u32=%s, i32=%s): %s",
                         definition_type, norm_hash, signed_hash, e,
@@ -393,9 +393,9 @@ class ManifestCache:
                             # normalize to unsigned u32 key
                             uid = int(row[0]) & 0xFFFFFFFF
                             defs[str(uid)] = json.loads(row[1])
-                        except Exception:
+                        except (json.JSONDecodeError, ValueError, TypeError):
                             continue
-                except Exception as e:
+                except sqlite3.Error as e:
                     logging.error(
                         "Manifest get_definitions failed for %s: %s", definition_type, e)
                 return defs
@@ -440,5 +440,5 @@ class ManifestCache:
             if os.path.exists(self.storage_path):
                 try:
                     os.remove(self.storage_path)
-                except Exception as e:
+                except OSError as e:
                     logging.warning("Failed to delete manifest DB file: %s", e)

@@ -1,4 +1,4 @@
-#pylint: disable=line-too-long,too-many-lines, broad-exception-caught
+#pylint: disable=line-too-long,too-many-lines
 """
 Models for Destiny 2 vault and character inventory management.
 
@@ -83,10 +83,10 @@ class ItemModel(BaseModel):
             value = stat_obj.get("value")
             try:
                 stat_hash_int = int(stat_hash)
-            except Exception:
+            except (TypeError, ValueError):
                 try:
                     stat_hash_int = int(str(stat_hash))
-                except Exception:
+                except (TypeError, ValueError):
                     stat_hash_int = None
             stats[stat_name] = value
             if stat_hash_int is not None:
@@ -162,7 +162,7 @@ class ItemModel(BaseModel):
         for idx_str, plugs in rp.items():
             try:
                 idx = int(idx_str)
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             choices = []
             for p in plugs or []:
@@ -339,7 +339,7 @@ class ItemModel(BaseModel):
             for idx_str, plugs in rp.items():
                 try:
                     idx = int(idx_str)
-                except Exception:
+                except (TypeError, ValueError):
                     continue
                 choices = []
                 for p in plugs or []:

@@ -1,8 +1,8 @@
-# pylint: disable=line-too-long,broad-exception-caught
+# pylint: disable=line-too-long
 """
 Vault Assistant module for Destiny 2.
 
-This module provides the VaultAssistant class, which encapsulates business logic for:
+Provides the `VaultAssistant` class, which encapsulates business logic for:
 - OAuth authentication and token refresh with Bungie.net
 - Secure storage and retrieval of session tokens using Azure Table Storage
 - Fetching and decoding Destiny 2 vault and character data
@@ -11,20 +11,24 @@ This module provides the VaultAssistant class, which encapsulates business logic
 
 All API interactions, manifest lookups, and backup operations are managed through this class.
 """
+
 import json
 import logging
 from datetime import datetime
 
 import requests
+from azure.core.exceptions import AzureError
 from azure.storage.blob import BlobServiceClient
+from requests.exceptions import RequestException
+from sqlalchemy.exc import SQLAlchemyError
 
 from bungie_session_manager import BungieSessionManager
 from constants import (API_KEY, BLOB_CONTAINER, BUNGIE_API_BASE,
                        BUNGIE_REQUIRED_DEFS, CLASS_TYPE_MAP, REQUEST_TIMEOUT,
                        STORAGE_CONNECTION_STRING, TABLE_NAME)
 from helpers import (blob_exists, get_blob_last_modified, load_blob,
-                     load_valid_blob, retry_request,
-                     save_blob, save_dim_backup_blob)
+                     load_valid_blob, retry_request, save_blob,
+                     save_dim_backup_blob)
 from manifest_cache import ManifestCache
 from models import CharacterModel, ItemModel, VaultModel
 from vault_sentinel_db_agent import VaultSentinelDBAgent
@@ -32,12 +36,13 @@ from vault_sentinel_db_agent import VaultSentinelDBAgent
 
 class VaultAssistant:
     """
-    Main business logic for Destiny 2 Vault Assistant operations.
+    Business logic for Destiny 2 Vault Assistant operations.
 
-    This class manages Destiny 2 API interactions, manifest lookups, backup operations, and delegates
-    session/authentication logic to BungieSessionManager. Integrates with Azure services for
-    secure storage and scalable operations. It supports decoding and persisting Destiny 2 vault and character data
-    using VaultModel and CharacterModel, and can persist decoded vaults to a relational database via ORM models.
+    Manages Destiny 2 API interactions, manifest lookups, and backup operations, and delegates
+    session/authentication logic to `BungieSessionManager`. Integrates with Azure services for
+    secure storage and scalable operations. Supports decoding and persisting Destiny 2 vault and
+    character data using `VaultModel` and `CharacterModel`, and can persist decoded data to a
+    relational database via ORM models.
     """
 
     def __init__(
@@ -50,7 +55,7 @@ class VaultAssistant:
         timeout: int = REQUEST_TIMEOUT
     ):
         """
-        Initialize VaultAssistant with configuration and dependencies.
+        Initialize a `VaultAssistant` with configuration and dependencies.
 
         Args:
             api_key (str): Bungie API key.
@@ -58,7 +63,7 @@ class VaultAssistant:
             table_name (str): Azure Table name for session storage.
             blob_container (str): Azure Blob container name.
             api_base (str): Bungie API base URL.
-            timeout (int): Request timeout in seconds.
+            timeout (int): HTTP request timeout in seconds.
         """
         self.api_key = api_key
         self.storage_conn_str = storage_conn_str
@@ -72,7 +77,16 @@ class VaultAssistant:
 
     @staticmethod
     def _merge_item_components(component_payload: dict | None) -> dict[str, dict]:
-        """Combine per-component sections into a single instance-id keyed map."""
+        """
+        Combine item component sections into a single instance-id keyed mapping.
+
+        Args:
+            component_payload (dict | None): The `itemComponents` payload from Bungie API Response,
+                typically containing sections like `instances`, `stats`, `perks`, `sockets`, and `reusablePlugs`.
+
+        Returns:
+            dict[str, dict]: Mapping of itemInstanceId to a combined structure of available components.
+        """
         if not component_payload:
             return {}
         combined: dict[str, dict] = {}
@@ -96,43 +110,43 @@ class VaultAssistant:
     # Session/auth methods are now delegated to BungieSessionManager
     def exchange_code_for_token(self, code: str) -> dict:
         """
-        Exchange OAuth code for access/refresh token, store in Table Storage, and return token data.
+        Exchange OAuth authorization code for access/refresh tokens, store them, and return token data.
 
         Args:
             code (str): OAuth authorization code.
 
         Returns:
-            dict: Token data from Bungie API.
+            dict: Token data returned from the Bungie API.
         """
         return self.session_manager.exchange_code_for_token(code)
 
     def get_session(self) -> dict:
         """
-        Retrieve stored session info including access token and membership ID.
+        Retrieve stored session info including access token and membership details.
 
         Returns:
-            dict: Session info with access token and membership ID.
+            dict: Session info with access token and membership identifiers.
         """
         return self.session_manager.get_session()
 
     def refresh_token(self, refresh_token_val: str) -> tuple[dict, int]:
         """
-        Refresh access token using the stored refresh token.
+        Refresh the access token using the provided refresh token value.
 
         Args:
             refresh_token_val (str): The refresh token value.
 
         Returns:
-            tuple: (token_data, status_code)
+            tuple[dict, int]: A tuple of (token_data, status_code).
         """
         return self.session_manager.refresh_token(refresh_token_val)
 
     def initialize_user(self) -> tuple[dict | None, int]:
         """
-        Authenticate user, load manifest, and fetch Destiny 2 character summary using stored session.
+        Authenticate user (via session), ensure manifest readiness, and fetch Destiny 2 character summary.
 
         Returns:
-            tuple: (user summary dict, status_code)
+            tuple[dict | None, int]: On success, a tuple of (user summary dict, 200). On error, (None, status_code).
         """
         session = self.get_session()
         access_token = session["access_token"]
@@ -179,14 +193,15 @@ class VaultAssistant:
 
     def get_bungie_profile_last_modified(self, membership_id: str, membership_type: str, headers: dict) -> tuple[datetime | None, int]:
         """
-        Helper to fetch Bungie profile last modified date as datetime.
+        Fetch the Bungie profile's last modified date as a timezone-naive UTC datetime.
+
         Args:
             membership_id (str): Destiny 2 membership ID.
             membership_type (str): Destiny 2 membership type.
             headers (dict): Headers to include in the request.
 
         Returns:
-            (datetime or None, status_code)
+            tuple[datetime | None, int]: A tuple of (last_modified_utc, status_code). If not available, datetime is None.
         """
         get_profile_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=100"
         profile_detail_resp = retry_request(requests.get, get_profile_url, headers=headers, timeout=self.timeout)
@@ -198,7 +213,7 @@ class VaultAssistant:
         if bungie_last_modified:
             try:
                 bungie_last_modified_dt = datetime.strptime(bungie_last_modified, "%Y-%m-%dT%H:%M:%SZ")
-            except Exception:
+            except ValueError:
                 bungie_last_modified_dt = None
         else:
             bungie_last_modified_dt = None
@@ -206,18 +221,18 @@ class VaultAssistant:
 
     def process_query(self, query: dict) -> dict:
         """
-        Process a Destiny 2 gear query using VaultSentinelDBAgent.
+        Process a Destiny 2 gear query using `VaultSentinelDBAgent`.
 
         Args:
             query (dict): Query conforming to the Vault Sentinel schema.
 
         Returns:
-            dict: Agent response.
+            dict: Agent response payload.
         """
         try:
             agent = VaultSentinelDBAgent.instance()
-        except Exception as e:
-            logging.error("Failed to obtain DB agent instance: %s", e)
+        except RuntimeError as e:
+            logging.error("Failed to obtain DB agent instance (runtime): %s", e)
             return {"status": "error", "error": "DB agent unavailable. Check configuration and logs."}
         # Allow graceful error if underlying services not configured
         if not getattr(agent, "Session", None):
@@ -227,12 +242,12 @@ class VaultAssistant:
 
     def get_vault(self) -> tuple[list, int] | tuple[None, int]:
         """
-        Efficiently fetch user's Destiny 2 vault inventory, using blob cache if up-to-date.
+        Fetch the user's Destiny 2 vault inventory efficiently, using blob cache when up-to-date.
 
-        Compares the blob's last modified date with Bungie profile's lastModified before fetching inventory.
+        Compares the blob's last modified date with the Bungie profile's lastModified before fetching inventory.
 
         Returns:
-            tuple: (inventory list, status_code)
+            tuple[list, int] | tuple[None, int]: (inventory list, 200) on success; otherwise (None, status_code).
         """
         session = self.get_session()
         access_token = session["access_token"]
@@ -280,10 +295,10 @@ class VaultAssistant:
 
     def get_characters(self) -> tuple[dict, int] | tuple[None, int]:
         """
-        Fetch user's Destiny 2 character inventories and save to blob storage, using cached data if up-to-date.
+        Fetch the user's character inventories and save to blob storage, using cached data when up-to-date.
 
         Returns:
-            tuple: (inventories dict, status_code)
+            tuple[dict, int] | tuple[None, int]: (inventories dict, 200) on success; otherwise (None, status_code).
         """
         session = self.get_session()
         access_token = session["access_token"]
@@ -374,7 +389,7 @@ class VaultAssistant:
             definition_type (str, optional): Manifest definition type to search in. If None, all loaded types are searched.
 
         Returns:
-            tuple: (definition dict, status_code)
+            tuple[dict | None, int]: (definition dict, 200) if found; otherwise (None, 404).
         """
         if definition_type:
             definition = self.manifest_cache.resolve_exact(item_hash, definition_type)
@@ -390,14 +405,14 @@ class VaultAssistant:
 
     def save_dim_backup(self, membership_id: str, dim_json_str: str) -> tuple[dict, int]:
         """
-        Save a DIM backup and its metadata.
+        Save a DIM backup and its metadata to blob storage and table storage.
 
         Args:
             membership_id (str): Destiny 2 membership ID.
-            dim_json_str (str): DIM backup JSON string.
+            dim_json_str (str): DIM backup JSON content as a string.
 
         Returns:
-            tuple: (result dict, status_code)
+            tuple[dict, int]: (result dict, 200) on success; error tuple otherwise.
         """
         logging.info("Saving DIM backup for user: %s", membership_id)
         timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
@@ -419,7 +434,7 @@ class VaultAssistant:
             membership_id (str): Destiny 2 membership ID.
 
         Returns:
-            tuple: (backups dict, status_code)
+            tuple[dict, int]: (backups dict, 200) on success; error tuple otherwise.
         """
         logging.info("Listing DIM backups for user: %s", membership_id)
         blob_service = BlobServiceClient.from_connection_string(
@@ -441,20 +456,20 @@ class VaultAssistant:
         force_refresh: bool = False,
     ) -> tuple[list, int]:
         """
-        Decode the vault inventory using VaultModel.from_components for each item. Optionally include perks. Supports pagination.
+        Decode the vault inventory using `VaultModel.from_components` for each item.
 
-        This method loads the user's vault inventory from blob storage, decodes it using VaultModel,
-        and returns a list of enriched item dicts. If requested, perks are included. Supports offset/limit for pagination.
-        The decoded vault can be persisted to a database using the ORM Vault and Item models.
+        Optionally include perks and support pagination via offset/limit. Loads the user's vault inventory from blob
+        storage, decodes it via `VaultModel`, and returns a list of enriched item dicts. The decoded vault can be
+        persisted to a database using the ORM `Vault` and `Item` models.
 
         Args:
-            include_perks (bool): If True, include perks for each item.
-            limit (int): Max number of items to return.
-            offset (int): Number of items to skip.
-            force_refresh (bool): If True, bypass cached decoded blobs and rebuild data.
+            include_perks (bool): If True, include perks for each item. Defaults to False.
+            limit (int | None): Max number of items to return. Defaults to None (no limit).
+            offset (int): Number of items to skip. Defaults to 0.
+            force_refresh (bool): If True, bypass cached decoded blobs and rebuild data. Defaults to False.
 
         Returns:
-            tuple: (decoded items list, status_code)
+            tuple[list, int]: (decoded items list, 200) on success; error tuple otherwise.
         """
         session = self.get_session()
         membership_id = session["membership_id"]
@@ -499,7 +514,7 @@ class VaultAssistant:
                     "Failed to fetch item components for vault decode. Status: %d",
                     components_resp.status_code
                 )
-        except Exception as exc:
+        except (RequestException, ValueError) as exc:
             logging.warning("Error fetching item components for vault decode: %s", exc)
 
         # Use VaultModel.from_components to decode and enrich inventory
@@ -517,7 +532,7 @@ class VaultAssistant:
                 _agent = VaultSentinelDBAgent.instance()
                 if getattr(_agent, "Session", None):
                     _agent.persist_vault(vault_model, membership_id, membership_type)
-            except Exception as e:
+            except (RuntimeError, AttributeError, SQLAlchemyError) as e:  # type: ignore[arg-type]
                 logging.warning("Skipping DB persist_vault due to initialization error: %s", e)
         if limit is None and offset == 0:
             save_blob(self.storage_conn_str, self.blob_container,
@@ -533,20 +548,20 @@ class VaultAssistant:
         force_refresh: bool = False,
     ) -> tuple[list, int]:
         """
-        Decode the character equipment using CharacterModel.from_components for each character. Optionally include perks. Supports pagination.
+        Decode character equipment using `CharacterModel.from_components` for each character.
 
-        This method loads the user's character inventories from blob storage, decodes each character using CharacterModel,
-        and returns a list of enriched character dicts. Each character's items are paginated and optionally include perks.
-        Decoded character inventories can be persisted to a database using the ORM Character and Item models.
+        Optionally include perks and support pagination via offset/limit. Loads the user's character inventories from
+        blob storage, decodes each character via `CharacterModel`, and returns a list of enriched character dicts.
+        Decoded character inventories can be persisted to a database using the ORM `Character` and `Item` models.
 
         Args:
-            include_perks (bool): If True, include perks for each item.
-            limit (int): Max number of items to return per character.
-            offset (int): Number of items to skip per character.
-            force_refresh (bool): If True, bypass cached decoded blobs and rebuild data.
+            include_perks (bool): If True, include perks for each item. Defaults to False.
+            limit (int | None): Max number of items to return per character. Defaults to None (no limit).
+            offset (int): Number of items to skip per character. Defaults to 0.
+            force_refresh (bool): If True, bypass cached decoded blobs and rebuild data. Defaults to False.
 
         Returns:
-            tuple: (decoded items list, status_code)
+            tuple[list, int]: (decoded characters list, 200) on success; error tuple otherwise.
         """
         session = self.get_session()
         membership_id = session["membership_id"]
@@ -593,7 +608,7 @@ class VaultAssistant:
                     "Failed to fetch item components for character decode. Status: %d",
                     components_resp.status_code
                 )
-        except Exception as exc:
+        except (RequestException, ValueError) as exc:
             logging.warning("Error fetching item components for character decode: %s", exc)
 
         decoded_characters: list[dict] = []
@@ -622,7 +637,7 @@ class VaultAssistant:
                 _agent = VaultSentinelDBAgent.instance()
                 if getattr(_agent, "Session", None):
                     _agent.persist_characters(character_models, membership_id, membership_type)
-            except Exception as e:
+            except (RuntimeError, AttributeError, SQLAlchemyError) as e:  # type: ignore[arg-type]
                 logging.warning("Skipping DB persist_characters due to initialization error: %s", e)
         if limit is None and offset == 0:
             save_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, json.dumps(decoded_characters))
@@ -631,10 +646,10 @@ class VaultAssistant:
 
     def get_session_token(self) -> tuple[dict, int]:
         """
-        Return current access token and membership ID, wrapped for external use.
+        Return the current access token and membership ID, wrapped for external use.
 
         Returns:
-            tuple: (session dict, status_code)
+            tuple[dict, int]: (session dict, 200) where the dict contains `access_token` and `membership_id`.
         """
         session = self.get_session()
         return {
@@ -644,16 +659,15 @@ class VaultAssistant:
 
     def save_object(self, mime_object) -> tuple[dict, int]:
         """
-        Save a MIME object (file-like) to Azure Blob Storage using save_blob helper.
+        Save a MIME-like object (file-like) to Azure Blob Storage using `save_blob` helper.
 
-        The MIME object should have 'filename', 'content_type', and 'content' attributes.
-        Returns a dict with blob name and URL on success.
+        The object should expose the attributes `filename`, `content_type`, and `content`.
 
         Args:
-            mime_object: Object with filename, content_type, and content attributes.
+            mime_object: An object with `filename` (str), `content_type` (str | None), and `content` (bytes/str).
 
         Returns:
-            tuple: (result dict, status_code)
+            tuple[dict, int]: (result dict, 200) on success; error tuple otherwise.
         """
         logging.info("Saving MIME object to blob storage.")
         filename = getattr(mime_object, 'filename', None)
@@ -669,21 +683,22 @@ class VaultAssistant:
             blob_url = f"{container_url}/{filename}"
             logging.info("Saved MIME object as blob: %s", blob_url)
             return {"message": "Object saved successfully.", "blob": filename, "url": blob_url}, 200
-        except Exception as e:
+        except (AzureError, TypeError, ValueError) as e:  # type: ignore[arg-type]
             logging.error("Failed to save MIME object: %s", e)
             return {"error": f"Failed to save object: {e}"}, 500
 
     def get_item_full_info(self, item_hash: str, item_instance_id: str = None) -> tuple[dict | None, int]:
         """
         Retrieve full information for an item, including perks, stats, and other properties.
-        If item_instance_id is provided, fetch instance-specific data (e.g., rolled perks, stats).
+
+        If `item_instance_id` is provided, fetch instance-specific data (e.g., rolled perks, stats).
 
         Args:
             item_hash (str): Destiny 2 item hash.
             item_instance_id (str, optional): Destiny 2 item instance ID.
 
         Returns:
-            tuple: (item info dict, status_code)
+            tuple[dict | None, int]: (item info dict, 200) if found; otherwise (None, 404).
         """
         raw_data = {
             "itemHash": item_hash,
@@ -694,4 +709,3 @@ class VaultAssistant:
             logging.error("Item hash %s not found in manifest.", item_hash)
             return None, 404
         return item_model.model_dump(), 200
-    

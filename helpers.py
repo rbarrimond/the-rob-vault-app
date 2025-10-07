@@ -1,4 +1,4 @@
-# pylint: disable=broad-except, line-too-long
+# pylint: disable=line-too-long
 """
 Utility functions for Destiny 2 manifest management, Azure Blob/Table Storage operations, and related helpers.
 
@@ -21,7 +21,7 @@ import requests
 
 from azure.storage.blob import BlobServiceClient
 from azure.data.tables import TableServiceClient
-from azure.core.exceptions import ResourceExistsError
+from azure.core.exceptions import ResourceExistsError, AzureError, ResourceNotFoundError
 
 def retry_request(method: callable, url: str, **kwargs) -> requests.Response:
     """
@@ -73,7 +73,7 @@ def normalize_item_hash(item_hash: int | str) -> str:
         h = int(item_hash)
         h = ctypes.c_uint32(h).value
         return str(h)
-    except Exception:
+    except (TypeError, ValueError):
         return str(item_hash)
 
 def compute_hash(content: str) -> str:
@@ -130,9 +130,11 @@ def load_blob(connection_string: str, container_name: str, blob_name: str) -> by
         data = blob_client.download_blob().readall()
         logging.info("Loaded blob: %s/%s", container_name, blob_name)
         return data
-    except Exception as e:
-        logging.error("Failed to load blob %s/%s: %s",
-                      container_name, blob_name, e)
+    except ResourceNotFoundError:
+        logging.info("Blob not found: %s/%s", container_name, blob_name)
+        return None
+    except AzureError as e:
+        logging.error("Failed to load blob %s/%s: %s", container_name, blob_name, e)
         return None
 
 def blob_exists(connection_string: str, container_name: str, blob_name: str) -> bool:
@@ -167,9 +169,12 @@ def get_blob_last_modified(connection_string: str, container_name: str, blob_nam
     blob_service = BlobServiceClient.from_connection_string(connection_string)
     container = blob_service.get_container_client(container_name)
     blob_client = container.get_blob_client(blob_name)
-    if blob_client.exists():
-        props = blob_client.get_blob_properties()
-        return props.last_modified.replace(tzinfo=None)
+    try:
+        if blob_client.exists():
+            props = blob_client.get_blob_properties()
+            return props.last_modified.replace(tzinfo=None)
+    except AzureError as e:
+        logging.warning("Failed to get last modified for blob %s/%s: %s", container_name, blob_name, e)
     return None
 
 
