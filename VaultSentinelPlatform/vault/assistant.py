@@ -372,16 +372,24 @@ class VaultAssistant:
 
         Returns:
             dict: Agent response payload.
+
+        Raises:
+            DependencyUnavailableError: If the backing DB agent cannot serve the request.
         """
         try:
             agent = VaultSentinelDBAgent.instance()
         except RuntimeError as exc:
             logging.error("Failed to obtain DB agent instance: %s", exc, exc_info=True)
-            return {"status": "error", "error": "DB agent unavailable. Check configuration and logs."}
-        # Allow graceful error if underlying services not configured
+            raise DependencyUnavailableError(
+                "DB agent unavailable. Check configuration and logs.",
+                details={"dependency": "vault_sentinel_db_agent"},
+            ) from exc
         if not getattr(agent, "session_factory", None):
             logging.error("DB agent session factory not initialized.")
-            return {"status": "error", "error": "Database not configured."}
+            raise DependencyUnavailableError(
+                "Database not configured.",
+                details={"dependency": "database_session_factory"},
+            )
         return agent.process_query(query)
 
     def get_vault(self) -> tuple[list, int] | tuple[None, int]:

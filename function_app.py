@@ -515,25 +515,20 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
 @endpoint()
 def query_agent(req: func.HttpRequest) -> func.HttpResponse:
     """
-    Accepts a JSON query conforming to the Vault Sentinel schema and returns the agent's response.
+    Accept a JSON query conforming to the Vault Sentinel schema and return the agent response.
 
-    Args:
-        req (func.HttpRequest): The HTTP request object. Expects JSON body with query.
-    Returns:
-        func.HttpResponse: JSON response with agent result or error.
+    Typed semantic and dependency exceptions are intentionally left for `@endpoint()` to
+    translate into the correct HTTP 400/503 responses.
     """
     logging.info("[query] POST request received.")
     try:
         query = req.get_json()
-    except ValueError as e:
-        logging.error("[query] Invalid JSON: %s", e)
+    except ValueError as exc:
+        logging.error("[query] Invalid JSON: %s", exc)
         return json_http_response({"error": "Invalid JSON"}, status_code=400)
-    try:
-        result = assistant.process_query(query)
-        return json_http_response(result, status_code=200, indent=2)
-    except (RuntimeError, ValueError, KeyError) as e:
-        logging.error("[query] Agent error: %s", e)
-        return json_http_response({"error": str(e)}, status_code=400)
+
+    result = assistant.process_query(query)
+    return json_http_response(result, status_code=200, indent=2)
 
 
 @app.route(route="static/{filename}", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)

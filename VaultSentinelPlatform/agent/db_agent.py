@@ -46,6 +46,7 @@ from VaultSentinelPlatform.config import (
 )
 from VaultSentinelPlatform.exceptions import (
     BusinessRuleViolationError,
+    ConfigurationError,
     DependencyUnavailableError,
     QueryValidationError,
 )
@@ -340,69 +341,160 @@ class VaultSentinelDBAgent:
             details={"dependency": "database_session", "attempts": max_attempts},
         )
 
+    @staticmethod
+    def _raise_query_validation_error(
+        message: str,
+        *,
+        cause: Exception | None = None,
+        **details: Any,
+    ) -> None:
+        """Raise a `QueryValidationError` with structured field details."""
+        error = QueryValidationError(message, details=details)
+        if cause is None:
+            raise error
+        raise error from cause
+
+    @staticmethod
+    def _raise_dependency_unavailable(
+        message: str,
+        *,
+        cause: Exception | None = None,
+        **details: Any,
+    ) -> None:
+        """Raise a `DependencyUnavailableError` with structured platform details."""
+        error = DependencyUnavailableError(message, details=details)
+        if cause is None:
+            raise error
+        raise error from cause
+
+    def _validate_required_query_fields(self, query: Dict[str, Any]) -> None:
+        """Ensure the required top-level query fields exist and are populated."""
+        required_keys = ["intent", "filters", "output", "sort", "limit"]
+        for key in required_keys:
+            if key not in query:
+                logging.error("Missing required key: %s", key)
+                self._raise_query_validation_error(
+                    f"Missing required key: {key}",
+                    field=key,
+                    reason="missing",
+                )
+            value = query[key]
+            if value is None:
+                logging.error("Key '%s' must not be null.", key)
+                self._raise_query_validation_error(
+                    f"Key '{key}' must not be null.",
+                    field=key,
+                    reason="null",
+                )
+            if isinstance(value, dict) and not value:
+                logging.error("Key '%s' must not be an empty dict.", key)
+                self._raise_query_validation_error(
+                    f"Key '{key}' must not be an empty object.",
+                    field=key,
+                    reason="empty",
+                )
+
+    def _validate_query_types(self, query: Dict[str, Any]) -> None:
+        """Validate the structural field types for the inbound query payload."""
+        expected_types = {
+            "intent": str,
+            "filters": dict,
+            "output": dict,
+            "sort": dict,
+            "limit": int,
+        }
+        for field, expected_type in expected_types.items():
+            if isinstance(query[field], expected_type):
+                continue
+            logging.error("'%s' must be a %s.", field, expected_type.__name__)
+            self._raise_query_validation_error(
+                f"'{field}' must be a {expected_type.__name__}.",
+                field=field,
+                expected=expected_type.__name__,
+            )
+
+    def _validate_query_business_rules(self, query: Dict[str, Any]) -> None:
+        """Validate semantic business rules once the payload shape is known-good."""
+        intent = query["intent"].strip()
+        if not intent:
+            self._raise_query_validation_error(
+                "'intent' must not be blank.",
+                field="intent",
+                reason="blank",
+            )
+        if query["limit"] <= 0:
+            raise BusinessRuleViolationError(
+                "Query limit must be greater than zero.",
+                details={"field": "limit", "value": query["limit"]},
+            )
+
+        direction = query["sort"].get("direction")
+        if direction is not None and direction not in {"asc", "desc"}:
+            self._raise_query_validation_error(
+                "Sort direction must be 'asc' or 'desc'.",
+                field="sort.direction",
+                value=direction,
+            )
+
     def validate_query(self, query: Dict[str, Any]) -> bool:
         """
-        Validates a query against the embedded schema, ensuring all required keys are present and valid.
+        Validate a query against the Vault Sentinel schema and core business rules.
 
         Args:
             query (Dict[str, Any]): The query to validate.
 
         Returns:
-            bool: True if the query is valid, False otherwise.
+            bool: True when the query is valid.
+
+        Raises:
+            QueryValidationError: When required schema fields are missing or malformed.
+            BusinessRuleViolationError: When a business invariant is violated.
         """
-        required_keys = ["intent", "filters", "output", "sort", "limit"]
-        for key in required_keys:
-            if key not in query:
-                logging.error("Missing required key: %s", key)
-                return False
-            if query[key] is None:
-                logging.error("Key '%s' must not be null.", key)
-                return False
-            # If the key is a dict, it must not be empty
-            if isinstance(query[key], dict) and not query[key]:
-                logging.error("Key '%s' must not be an empty dict.", key)
-                return False
-        if not isinstance(query["intent"], str):
-            logging.error("'intent' must be a string.")
-            return False
-        if not isinstance(query["filters"], dict):
-            logging.error("'filters' must be a dict.")
-            return False
-        if not isinstance(query["output"], dict):
-            logging.error("'output' must be a dict.")
-            return False
-        if not isinstance(query["sort"], dict):
-            logging.error("'sort' must be a dict.")
-            return False
-        if not isinstance(query["limit"], int):
-            logging.error("'limit' must be an int.")
-            return False
+        if not isinstance(query, dict):
+            self._raise_query_validation_error(
+                "Query payload must be a JSON object.",
+                expected="dict",
+                actual=type(query).__name__,
+            )
+
+        self._validate_required_query_fields(query)
+        self._validate_query_types(query)
+        self._validate_query_business_rules(query)
         return True
 
 
     def process_query(self, query: Dict[str, Any]) -> Dict[str, Any]:
         """
         Main business logic for processing Destiny 2 gear queries.
-        Uses AI to generate SQL, executes it via SQLAlchemy, and returns results.
+
+        Returns:
+            Dict[str, Any]: Successful query payload.
+
+        Raises:
+            QueryValidationError: If the inbound query is malformed.
+            BusinessRuleViolationError: If the generated SQL violates platform safety rules.
+            ConfigurationError: If Azure OpenAI is not configured.
+            DependencyUnavailableError: If Azure OpenAI or the database are unavailable.
         """
-        if not self.validate_query(query):
-            raise QueryValidationError(
-                "Query does not conform to schema.",
-                details={"provided_keys": sorted(query.keys())},
-            )
+        self.validate_query(query)
         logging.info("Processing query: %s", query["intent"])
 
         if not self.session_factory:
             logging.error("SQLAlchemy sessionmaker not initialized.")
-            return {"status": "error", "error": "Sessionmaker not initialized"}
+            raise DependencyUnavailableError(
+                "Database sessionmaker is not initialized.",
+                details={"dependency": "database_session_factory"},
+            )
 
         if self.chat_client is None:
             logging.error("Azure OpenAI client is not configured. Set AZURE_OPENAI_* settings.")
-            return {"status": "error", "error": "Azure OpenAI not configured."}
+            raise ConfigurationError(
+                "Azure OpenAI client is not configured.",
+                details={"dependency": "azure_openai", "settings": "AZURE_OPENAI_*"},
+            )
 
         deployment_name = OPENAI_DEPLOYMENT or ""
 
-        # Get instructions for the AI
         with open("db-agent-instructions.md", "r", encoding="utf-8") as f:
             instructions = f.read()
 
@@ -430,7 +522,10 @@ class VaultSentinelDBAgent:
             valid, reason = self._validate_sql(sql_query)
             if not valid:
                 logging.error("Rejected AI SQL: %s", reason)
-                return {"status": "error", "error": f"Rejected SQL: {reason}"}
+                raise BusinessRuleViolationError(
+                    "Generated SQL violated Vault Sentinel safety rules.",
+                    details={"reason": reason, "intent": query["intent"]},
+                )
 
             session = self._get_session_with_cold_start_handling()
             try:
@@ -443,30 +538,50 @@ class VaultSentinelDBAgent:
                 session.close()
 
         except BadRequestError as e:
-            logging.error("Azure OpenAI bad request: %s", e)
-            return {"status": "error", "error": "Azure OpenAI bad request. Check prompt/schema and inputs."}
+            logging.error("Azure OpenAI bad request: %s", e, exc_info=True)
+            self._raise_query_validation_error(
+                "Azure OpenAI rejected the query payload.",
+                cause=e,
+                dependency="azure_openai",
+            )
         except RateLimitError as e:
-            logging.warning("Azure OpenAI rate limit: %s", e)
-            return {"status": "error", "error": "Azure OpenAI rate limit exceeded. Please retry shortly."}
+            logging.warning("Azure OpenAI rate limit: %s", e, exc_info=True)
+            self._raise_dependency_unavailable(
+                "Azure OpenAI rate limit exceeded. Please retry shortly.",
+                cause=e,
+                dependency="azure_openai",
+            )
         except (APIConnectionError, APITimeoutError) as e:
-            logging.error("Azure OpenAI network/timeout error: %s", e)
-            return {"status": "error", "error": "Azure OpenAI network or timeout error. Please try again."}
+            logging.error("Azure OpenAI network/timeout error: %s", e, exc_info=True)
+            self._raise_dependency_unavailable(
+                "Azure OpenAI network or timeout error. Please try again.",
+                cause=e,
+                dependency="azure_openai",
+            )
         except APIError as e:
-            logging.error("Azure OpenAI service error: %s", e)
-            return {"status": "error", "error": "Azure OpenAI service error. Try again later."}
-        except DependencyUnavailableError as e:
-            logging.error("process_query dependency error: %s", e, exc_info=True)
-            return {
-                "status": "error",
-                "error": self._DATABASE_UNAVAILABLE_MESSAGE,
-            }
-        except (SQLAlchemyError, pyodbc.Error, ValueError) as e:
-            logging.error("process_query DB/validation error: %s", e, exc_info=True)
-            return {
-                "status": "error",
-                "error": "Database query failed. Check logs.",
-            }
-        # Let unexpected errors (e.g., OpenAI SDK) propagate to the caller
+            logging.error("Azure OpenAI service error: %s", e, exc_info=True)
+            self._raise_dependency_unavailable(
+                "Azure OpenAI service error. Try again later.",
+                cause=e,
+                dependency="azure_openai",
+            )
+        except (SQLAlchemyError, pyodbc.Error) as e:
+            logging.error("process_query DB error: %s", e, exc_info=True)
+            self._raise_dependency_unavailable(
+                "Database query failed. Check configuration and logs.",
+                cause=e,
+                dependency="database_session",
+            )
+        except ValueError as e:
+            if isinstance(e, (BusinessRuleViolationError, QueryValidationError)):
+                raise
+            logging.error("process_query validation error: %s", e, exc_info=True)
+            self._raise_query_validation_error(
+                "Query payload could not be processed.",
+                cause=e,
+                reason="value_error",
+            )
+        # Let unexpected errors propagate to the caller
 
     # --- SQL Validation ---
     _ALLOWED_TABLES = {

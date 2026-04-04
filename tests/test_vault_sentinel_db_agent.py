@@ -6,7 +6,12 @@ import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
 from VaultSentinelPlatform.agent.db_agent import VaultSentinelDBAgent
-from VaultSentinelPlatform.exceptions import DependencyUnavailableError, QueryValidationError
+from VaultSentinelPlatform.exceptions import (
+    BusinessRuleViolationError,
+    ConfigurationError,
+    DependencyUnavailableError,
+    QueryValidationError,
+)
 
 
 def get_valid_query():
@@ -69,8 +74,8 @@ def test_get_session_with_cold_start_handling_translates_sqlalchemy_error() -> N
     assert exc_info.value.__cause__ is not None
 
 
-def test_process_query_redacts_dependency_error_details() -> None:
-    """HTTP-facing query failures should not expose raw infrastructure exception text."""
+def test_process_query_raises_dependency_error_for_http_adapter() -> None:
+    """Database dependency failures should stay typed for the HTTP adapter to translate."""
     VaultSentinelDBAgent.reset_instance()
     agent = VaultSentinelDBAgent.instance()
     agent.chat_client = MagicMock()
@@ -90,9 +95,35 @@ def test_process_query_redacts_dependency_error_details() -> None:
             ),
         ),
     ):
-        result = agent.process_query(get_valid_query())
+        with pytest.raises(DependencyUnavailableError, match="driver offline"):
+            agent.process_query(get_valid_query())
 
-    assert result == {
-        "status": "error",
-        "error": "Database dependency unavailable. Check configuration and logs.",
-    }
+
+def test_process_query_raises_configuration_error_when_openai_not_configured() -> None:
+    """Missing Azure OpenAI configuration should surface as a typed configuration error."""
+    VaultSentinelDBAgent.reset_instance()
+    agent = VaultSentinelDBAgent.instance()
+    agent.chat_client = None
+    agent.session_factory = MagicMock()
+
+    with pytest.raises(ConfigurationError, match="Azure OpenAI client is not configured"):
+        agent.process_query(get_valid_query())
+
+
+def test_process_query_raises_business_rule_violation_for_rejected_sql() -> None:
+    """Unsafe AI-generated SQL should be rejected as a business-rule failure, not a generic error dict."""
+    VaultSentinelDBAgent.reset_instance()
+    agent = VaultSentinelDBAgent.instance()
+    agent.chat_client = MagicMock()
+    agent.chat_client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content="DELETE FROM items"))]
+    )
+    agent.session_factory = MagicMock()
+
+    with (
+        patch("builtins.open", MagicMock()),
+        patch("json.dumps", MagicMock()),
+    ):
+        with pytest.raises(BusinessRuleViolationError, match="Generated SQL violated Vault Sentinel safety rules"):
+            agent.process_query(get_valid_query())
+
