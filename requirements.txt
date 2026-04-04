@@ -1,32 +1,31 @@
 ########################################
 # Pydantic for data models
 ########################################
-pydantic>=2.0.0
+pydantic>=2.12.5
 
 ########################################
 # General dependencies
 ########################################
-psutil
-requests
+psutil>=7.2.2
+requests>=2.33.1
 
 ########################################
 # Azure Functions dependencies
 ########################################
-azure-functions
-cryptography==43.0.3  # Workaround for Azure Functions for cryptography dependency issue
+azure-functions>=1.24.0
 
 ########################################
 # Azure Data dependencies
 ########################################
-azure-core
-azure-data-tables
-azure-storage-blob
+azure-core>=1.39.0
+azure-data-tables>=12.7.0
+azure-storage-blob>=12.28.0
 
 ########################################
 # Azure SQL and AI integration
 ########################################
-azure-identity
-openai
-pyodbc
+azure-identity>=1.25.3
+openai>=2.30.0
+pyodbc>=5.3.0
 # SQLAlchemy ORM for database models
-SQLAlchemy>=2.0
+SQLAlchemy>=2.0.49
