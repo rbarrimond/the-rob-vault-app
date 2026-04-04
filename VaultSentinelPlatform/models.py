@@ -199,6 +199,21 @@ class ItemModel(BaseModel):
             (item_def or {}).get("inventory", {}).get("tierTypeName", "Unknown"),
         )
 
+    @staticmethod
+    def _coerce_item_hash(item_hash: Any) -> int:
+        """Normalize a raw Bungie item hash into the required integer form."""
+        try:
+            return int(item_hash)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("raw_item is missing a valid itemHash") from exc
+
+    @staticmethod
+    def _coerce_item_instance_id(item_instance_id: Any) -> Optional[str]:
+        """Normalize a raw Bungie item instance ID into a string when present."""
+        if item_instance_id in (None, ""):
+            return None
+        return str(item_instance_id)
+
     @classmethod
     def _apply_prefetched_components(
         cls,
@@ -273,7 +288,8 @@ class ItemModel(BaseModel):
         Uses ManifestCache and BungieSessionManager singletons internally; does not require them as parameters.
         """
         manifest_cache = ManifestCache.instance()
-        item_hash = raw_item.get("itemHash")
+        item_hash = cls._coerce_item_hash(raw_item.get("itemHash"))
+        item_instance_id = cls._coerce_item_instance_id(raw_item.get("itemInstanceId"))
         item_def, item_name, item_type, item_tier = cls._resolve_item_metadata(manifest_cache, item_hash)
 
         stats: Dict[str, int] = {}
@@ -285,14 +301,14 @@ class ItemModel(BaseModel):
 
         if components:
             cls._apply_prefetched_components(components, manifest_cache, stats, stat_details, perks)
-        elif raw_item.get("itemInstanceId"):
+        elif item_instance_id:
             session_manager = BungieSessionManager.instance()
-            instance_info = cls._build_instance_info(raw_item.get("itemInstanceId"), session_manager, manifest_cache)
+            instance_info = cls._build_instance_info(item_instance_id, session_manager, manifest_cache)
             cls._apply_instance_info(instance_info, stats, stat_details, perks)
 
         return cls(
             itemHash=item_hash,
-            itemInstanceId=raw_item.get("itemInstanceId"),
+            itemInstanceId=item_instance_id,
             itemName=item_name,
             itemType=item_type,
             itemTier=item_tier,
@@ -423,7 +439,8 @@ class ItemModel(BaseModel):
             item_components (Optional[dict]): Item instance components.
         """
         manifest_cache = ManifestCache.instance()
-        item_hash = raw_item.get("itemHash")
+        item_hash = cls._coerce_item_hash(raw_item.get("itemHash"))
+        item_instance_id = cls._coerce_item_instance_id(raw_item.get("itemInstanceId"))
         _, item_name, item_type, item_tier = cls._resolve_item_metadata(manifest_cache, item_hash)
 
         stats: Dict[str, int] = {}
@@ -442,7 +459,7 @@ class ItemModel(BaseModel):
 
         return cls(
             itemHash=item_hash,
-            itemInstanceId=raw_item.get("itemInstanceId"),
+            itemInstanceId=item_instance_id,
             itemName=item_name,
             itemType=item_type,
             itemTier=item_tier,
