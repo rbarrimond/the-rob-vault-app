@@ -40,6 +40,7 @@ This app is designed to serve as a backend tool for my custom ChatGPT assistant,
 - `function_app.py` — Main Azure Function App code
 - `vault_assistant.py` — Assistant logic for Destiny 2 data
 - `helpers.py` — Helper functions for Azure and Bungie API
+- `VaultSentinelPlatform/exceptions.py` — platform-level business exception hierarchy for domain-safe error handling
 - `VaultSentinelPlatform/manifest/` — SQLite-native manifest services for blob persistence and typed queries
 - `requirements.txt` — Python dependencies
 - `local.settings.json` — Local development settings (not for production)

@@ -31,6 +31,12 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SaTimeoutError
 from sqlalchemy.pool import NullPool
 
+from VaultSentinelPlatform.exceptions import (
+    BusinessRuleViolationError,
+    DependencyUnavailableError,
+    DomainError,
+    QueryValidationError,
+)
 from constants import (
     OPENAI_API_KEY, OPENAI_API_VERSION, OPENAI_DEPLOYMENT,
     OPENAI_ENDPOINT, SQL_DATABASE, SQL_DRIVER, SQL_SERVER,
@@ -50,6 +56,16 @@ from models import (
     Vault,
 )
 from manifest_identity import race_name_to_hash
+
+__all__ = [
+    "VaultSentinelDBAgent",
+    "BusinessRuleViolationError",
+    "DependencyUnavailableError",
+    "DomainError",
+    "QueryValidationError",
+]
+
+_DOMAIN_ERROR_BASE = DomainError
 
 
 class VaultSentinelDBAgent:
@@ -229,7 +245,10 @@ class VaultSentinelDBAgent:
     def _open_validated_session(self):
         """Create a session and verify the connection with a lightweight query."""
         if not self.session_factory:
-            raise RuntimeError("Database session not available")
+            raise DependencyUnavailableError(
+                "Database session not available",
+                details={"dependency": "database_session_factory"},
+            )
         session = self.session_factory()
         session.execute(text("SELECT 1")).scalar()
         return session
@@ -275,10 +294,14 @@ class VaultSentinelDBAgent:
             sqlalchemy.orm.Session: A SQLAlchemy session object.
 
         Raises:
+            DependencyUnavailableError: If the session dependency is not initialized.
             RuntimeError: If the session cannot be created after multiple attempts.
         """
         if not self.session_factory:
-            raise RuntimeError("Database session not available")
+            raise DependencyUnavailableError(
+                "Database session not available",
+                details={"dependency": "database_session_factory"},
+            )
 
         max_attempts = 5 if not self._connection_warmed else 3
         base_delay = 2
@@ -350,7 +373,10 @@ class VaultSentinelDBAgent:
         Uses AI to generate SQL, executes it via SQLAlchemy, and returns results.
         """
         if not self.validate_query(query):
-            raise ValueError("Query does not conform to schema.")
+            raise QueryValidationError(
+                "Query does not conform to schema.",
+                details={"provided_keys": sorted(query.keys())},
+            )
         logging.info("Processing query: %s", query["intent"])
 
         if not self.session_factory:
@@ -497,7 +523,10 @@ class VaultSentinelDBAgent:
         """Convert an identifier to `int` and fail fast if it is unavailable."""
         normalized = self._safe_int(value)
         if normalized is None:
-            raise RuntimeError(f"Expected {label} to be populated")
+            raise BusinessRuleViolationError(
+                f"Expected {label} to be populated",
+                details={"label": label},
+            )
         return normalized
 
     def _get_or_create_user(self, session, membership_id: str, membership_type: str) -> User:

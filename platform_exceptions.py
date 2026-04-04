@@ -1,7 +1,6 @@
-# pylint: disable=invalid-name
-"""Vault Sentinel platform package."""
+"""Compatibility shim for platform exception exports."""
 
-from .exceptions import (
+from VaultSentinelPlatform.exceptions import (
     BusinessRuleViolationError,
     ConfigurationError,
     DependencyUnavailableError,

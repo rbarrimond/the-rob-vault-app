@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # pylint: disable=import-error
-from vault_sentinel_db_agent import VaultSentinelDBAgent
+from vault_sentinel_db_agent import QueryValidationError, VaultSentinelDBAgent
 
 
 def get_valid_query():
@@ -48,5 +48,5 @@ def test_process_query_invalid_query():
     VaultSentinelDBAgent.reset_instance()
     agent = VaultSentinelDBAgent.instance()
     invalid_query = {"intent": None}
-    with pytest.raises(ValueError):
+    with pytest.raises(QueryValidationError):
         agent.process_query(invalid_query)
