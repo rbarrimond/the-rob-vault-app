@@ -49,6 +49,7 @@ py-modules = [
     "constants",
     "function_app",
     "helpers",
+    "utils",
     "manifest_cache",
     "manifest_identity",
     "models",
