@@ -52,7 +52,6 @@ py-modules = [
     "manifest_cache",
     "manifest_identity",
     "models",
-    "platform_exceptions",
     "vault_assistant",
     "vault_sentinel_db_agent",
 ]

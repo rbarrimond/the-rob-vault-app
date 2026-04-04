@@ -1,10 +1,11 @@
 """Unit tests for VaultSentinelDBAgent."""
+# pylint: disable=import-error
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# pylint: disable=import-error
-from vault_sentinel_db_agent import QueryValidationError, VaultSentinelDBAgent
+from VaultSentinelPlatform.exceptions import QueryValidationError
+from vault_sentinel_db_agent import VaultSentinelDBAgent
 
 
 def get_valid_query():

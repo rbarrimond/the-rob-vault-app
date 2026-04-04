@@ -34,7 +34,6 @@ from sqlalchemy.pool import NullPool
 from VaultSentinelPlatform.exceptions import (
     BusinessRuleViolationError,
     DependencyUnavailableError,
-    DomainError,
     QueryValidationError,
 )
 from constants import (
@@ -56,16 +55,6 @@ from models import (
     Vault,
 )
 from manifest_identity import race_name_to_hash
-
-__all__ = [
-    "VaultSentinelDBAgent",
-    "BusinessRuleViolationError",
-    "DependencyUnavailableError",
-    "DomainError",
-    "QueryValidationError",
-]
-
-_DOMAIN_ERROR_BASE = DomainError
 
 
 class VaultSentinelDBAgent:
