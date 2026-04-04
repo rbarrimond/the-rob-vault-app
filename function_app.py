@@ -12,23 +12,29 @@ Exposes HTTP-triggered Azure Functions for:
 All endpoints return JSON or HTML responses suitable for web and API clients.
 """
 
-import base64
-import binascii
 import json
 import logging
 import os
 import platform
 import sys
 import types
-import gzip
-from io import BytesIO
 
 import azure.functions as func
 import psutil
 from requests.exceptions import RequestException
 from sqlalchemy.exc import SQLAlchemyError
-import pyodbc
 
+from utils import (
+    INVALID_PAGINATION_MESSAGE,
+    PYODBC_ERROR,
+    build_save_response,
+    compress_response_if_requested,
+    compute_refresh_schedule,
+    decode_save_content,
+    endpoint,
+    json_http_response,
+    parse_pagination_params,
+)
 from vault_assistant import VaultAssistant
 
 # NOTE: Logging bootstrap for Azure Functions
@@ -53,95 +59,9 @@ else:
 app = func.FunctionApp()
 assistant = VaultAssistant()
 
-JSON_MIMETYPE = "application/json"
-INVALID_PAGINATION_MESSAGE = "Invalid limit or offset parameter."
-
-try:
-    PYODBC_ERROR = pyodbc.Error  # pylint: disable=c-extension-no-member
-except AttributeError:  # pragma: no cover
-    class PyodbcRuntimeError(Exception):
-        """Fallback pyodbc error type when the C extension cannot expose members."""
-
-    PYODBC_ERROR = PyodbcRuntimeError
-
-
-def json_http_response(
-    payload: dict | list,
-    status_code: int = 200,
-    *,
-    indent: int | None = None,
-) -> func.HttpResponse:
-    """Return a JSON response using the shared JSON mimetype constant."""
-    return func.HttpResponse(
-        json.dumps(payload, indent=indent),
-        status_code=status_code,
-        mimetype=JSON_MIMETYPE,
-    )
-
-
-def _decode_save_content(content: str | bytes, encoding: str | None) -> bytes:
-    """Decode object-save payload content into bytes based on the declared encoding."""
-    if encoding == "base64":
-        try:
-            return base64.b64decode(content)
-        except (binascii.Error, TypeError) as exc:
-            raise ValueError(f"Base64 decode failed: {exc}") from exc
-    if encoding in {"utf-8", None}:
-        return content.encode("utf-8") if isinstance(content, str) else content
-    raise ValueError(f"Unsupported encoding: {encoding}")
-
-
-def _build_save_response(
-    result: dict,
-    status: int,
-    filename: str,
-) -> tuple[dict[str, str], int]:
-    """Build the API payload returned by the object-save endpoint."""
-    if status == 200:
-        return {
-            "message": result.get("message", "Object saved successfully."),
-            "blob": result.get("blob", filename),
-            "url": result.get("url", ""),
-        }, 200
-    if status == 400:
-        return {
-            "error": result.get(
-                "error",
-                "Bad request (missing fields or invalid content)",
-            )
-        }, 400
-    return {
-        "error": result.get(
-            "error",
-            "Internal server error (failed to save object)",
-        )
-    }, 500
-
-
-_refresh_env = os.getenv("VAULT_REFRESH_INTERVAL_MINUTES")
-_default_refresh_minutes = 30
-
-def _compute_refresh_schedule() -> tuple[str | None, int | None]:
-    """Compute cron schedule and interval minutes from env var."""
-    if _refresh_env is None or not _refresh_env.strip():
-        return f"0 */{_default_refresh_minutes} * * * *", _default_refresh_minutes
-    try:
-        interval = int(_refresh_env.strip())
-    except ValueError:
-        logging.warning("Invalid VAULT_REFRESH_INTERVAL_MINUTES='%s'. Disabling timer.", _refresh_env)
-        return None, None
-    if interval < 0:
-        logging.info("Vault refresh timer disabled (interval %d).", interval)
-        return None, None
-    if interval == 0:
-        logging.warning("Interval 0 is not supported. Disabling timer.")
-        return None, None
-    if interval < 60:
-        return f"0 */{interval} * * * *", interval
-    hours = max(1, interval // 60)
-    return f"0 0 */{hours} * * *", interval
-
-_refresh_schedule, _refresh_interval_minutes = _compute_refresh_schedule()
+_refresh_schedule, _refresh_interval_minutes = compute_refresh_schedule(
+    os.getenv("VAULT_REFRESH_INTERVAL_MINUTES")
+)
 
 if _refresh_schedule:
 
@@ -181,37 +101,13 @@ if _refresh_schedule:
 else:
     logging.info("Vault refresh timer not registered (disabled).")
 
-def compress_response_if_requested(data: str, req: func.HttpRequest, status_code: int = 200) -> func.HttpResponse:
-    """
-    Compresses the response using gzip if the client requests it via Accept-Encoding header or query param.
-    Args:
-        data (str): The response data (JSON string).
-        req (func.HttpRequest): The HTTP request object.
-        status_code (int): HTTP status code.
-    Returns:
-        func.HttpResponse: Compressed or plain response.
-    """
-    accept_encoding = req.headers.get("Accept-Encoding", "")
-    compress_param = req.params.get("compress", "false").lower() == "true"
-    if "gzip" in accept_encoding.lower() or compress_param:
-        buf = BytesIO()
-        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
-            gz.write(data.encode("utf-8"))
-        compressed = buf.getvalue()
-        return func.HttpResponse(
-            body=compressed,
-            status_code=status_code,
-            mimetype=JSON_MIMETYPE,
-            headers={"Content-Encoding": "gzip"},
-        )
-    return func.HttpResponse(data, mimetype=JSON_MIMETYPE, status_code=status_code)
-
 # ----------------------
 # Route Handler Functions
 # ----------------------
 
 
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@endpoint()
 def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
     """
     Health check endpoint for Azure monitoring.
@@ -322,6 +218,7 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="session", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def get_session(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the current session information including access token and membership ID.
@@ -340,6 +237,7 @@ def get_session(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="session/token", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def session_token(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the current access token and membership ID.
@@ -358,6 +256,7 @@ def session_token(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="token/refresh", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
     """
     Refreshes the access token using the stored refresh token via the assistant.
@@ -386,6 +285,7 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
 # --- Main Functionality Endpoints ---
 
 @app.route(route="vault", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def vault(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the user's Destiny 2 vault inventory items.
@@ -398,11 +298,8 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("[vault] GET request received.")
     logging.info("[vault] Query params: limit=%s, offset=%s", req.params.get('limit'), req.params.get('offset'))
     try:
-        limit = req.params.get("limit")
-        offset = req.params.get("offset")
-        limit = int(limit) if limit is not None else None
-        offset = int(offset) if offset is not None else 0
-    except (ValueError, TypeError):
+        limit, offset = parse_pagination_params(req)
+    except ValueError:
         return func.HttpResponse(INVALID_PAGINATION_MESSAGE, status_code=400)
     inventory, status = assistant.get_vault()
     if inventory is None:
@@ -419,6 +316,7 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="characters", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def characters(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the user's Destiny 2 character equipment data.
@@ -431,11 +329,8 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("[characters] GET request received.")
     logging.debug("[characters] Query params: limit=%s, offset=%s", req.params.get('limit'), req.params.get('offset'))
     try:
-        limit = req.params.get("limit")
-        offset = req.params.get("offset")
-        limit = int(limit) if limit is not None else None
-        offset = int(offset) if offset is not None else 0
-    except (ValueError, TypeError):
+        limit, offset = parse_pagination_params(req)
+    except ValueError:
         return func.HttpResponse(INVALID_PAGINATION_MESSAGE, status_code=400)
     equipment, status = assistant.get_characters()
     if equipment is None:
@@ -463,6 +358,7 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="vault/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the decoded version of the user's Destiny 2 vault inventory.
@@ -477,11 +373,8 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
     include_perks = req.params.get("includePerks", "false").lower() == "true"
     force_refresh = req.params.get("forceRefresh", "false").lower() == "true"
     try:
-        limit = req.params.get("limit")
-        offset = req.params.get("offset")
-        limit = int(limit) if limit is not None else None
-        offset = int(offset) if offset is not None else 0
-    except (ValueError, TypeError):
+        limit, offset = parse_pagination_params(req)
+    except ValueError:
         return func.HttpResponse(INVALID_PAGINATION_MESSAGE, status_code=400)
     try:
         result, status = assistant.decode_vault(
@@ -498,6 +391,7 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="characters/decoded", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the decoded version of the user's Destiny 2 character equipment.
@@ -512,11 +406,8 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
     include_perks = req.params.get("includePerks", "false").lower() == "true"
     force_refresh = req.params.get("forceRefresh", "false").lower() == "true"
     try:
-        limit = req.params.get("limit")
-        offset = req.params.get("offset")
-        limit = int(limit) if limit is not None else None
-        offset = int(offset) if offset is not None else 0
-    except (ValueError, TypeError):
+        limit, offset = parse_pagination_params(req)
+    except ValueError:
         return func.HttpResponse(INVALID_PAGINATION_MESSAGE, status_code=400)
     try:
         result, status = assistant.decode_characters(
@@ -533,6 +424,7 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="manifest/item", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
     """
     Returns the manifest definition for a given Destiny 2 item.
@@ -565,6 +457,7 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
 # --- DIM Backup and Data Management Endpoints ---
 
 @app.route(route="dim/backup", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
     """
     Uploads a DIM backup and stores it in blob storage with metadata.
@@ -592,6 +485,7 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="dim/list", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def dim_list(req: func.HttpRequest) -> func.HttpResponse:
     """
     Lists available DIM backups stored in blob storage for the current membership ID.
@@ -618,6 +512,7 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="query", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def query_agent(req: func.HttpRequest) -> func.HttpResponse:
     """
     Accepts a JSON query conforming to the Vault Sentinel schema and returns the agent's response.
@@ -663,6 +558,7 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="save", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+@endpoint()
 def save_object(req: func.HttpRequest) -> func.HttpResponse:
     """Save an object or file to Azure Blob Storage."""
     logging.info("[save] POST request received.")
@@ -686,7 +582,7 @@ def save_object(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     try:
-        content_bytes = _decode_save_content(content, encoding)
+        content_bytes = decode_save_content(content, encoding)
     except ValueError as exc:
         return json_http_response({"error": str(exc)}, status_code=400)
 
@@ -696,5 +592,5 @@ def save_object(req: func.HttpRequest) -> func.HttpResponse:
         content=content_bytes,
     )
     result, status = assistant.save_object(mime_obj)
-    response_payload, response_status = _build_save_response(result, status, filename)
+    response_payload, response_status = build_save_response(result, status, filename)
     return json_http_response(response_payload, status_code=response_status)
