@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "the-rob-vault-app"
+version = "0.1.0"
+description = "Azure Functions backend for Destiny 2 Vault Sentinel and Bungie vault automation"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0.0",
+    "psutil",
+    "requests",
+    "azure-functions",
+    "cryptography==43.0.3",
+    "azure-core",
+    "azure-data-tables",
+    "azure-storage-blob",
+    "azure-identity",
+    "openai",
+    "pyodbc",
+    "SQLAlchemy>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-mock>=3.14.0",
+    "debugpy>=1.8.0",
+    "ipykernel>=6.29.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v"
+norecursedirs = ["__pycache__"]
+
+[tool.setuptools]
+py-modules = [
+    "bungie_session_manager",
+    "constants",
+    "function_app",
+    "helpers",
+    "manifest_cache",
+    "manifest_identity",
+    "models",
+    "vault_assistant",
+    "vault_sentinel_db_agent",
+]

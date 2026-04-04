@@ -323,7 +323,7 @@ If your feature addition needs new infrastructure:
 ```bash
 # One-time setup
 cd the-rob-vault-app
-python --version  # Verify Python 3.13
+python --version  # Verify Python 3.11
 python -m venv venv
 source venv/bin/activate
 pip install -e ".[dev]"  # Install production + development dependencies
