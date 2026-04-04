@@ -13,17 +13,18 @@ This module provides:
 import time
 import logging
 import hashlib
+from collections.abc import Callable
 from datetime import UTC, datetime
 import ctypes
 from typing import Optional
 
 import requests
 
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.data.tables import TableServiceClient
 from azure.core.exceptions import ResourceExistsError, AzureError, ResourceNotFoundError
 
-def retry_request(method: callable, url: str, **kwargs) -> requests.Response:
+def retry_request(method: Callable[..., requests.Response], url: str, **kwargs) -> requests.Response:
     """
     Perform an API request with exponential backoff retry logic.
 
@@ -88,7 +89,13 @@ def compute_hash(content: str) -> str:
     """
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-def save_blob(connection_string: str, container_name: str, blob_name: str, data: bytes | str, content_type: str = None) -> None:
+def save_blob(
+    connection_string: str,
+    container_name: str,
+    blob_name: str,
+    data: bytes | str,
+    content_type: str | None = None,
+) -> None:
     """
     Save data to Azure Blob Storage in the specified container and blob name.
 
@@ -105,10 +112,18 @@ def save_blob(connection_string: str, container_name: str, blob_name: str, data:
         container.create_container()
     except ResourceExistsError:
         logging.info("Blob container '%s' already exists.", container_name)
-    upload_args = {"overwrite": True}
-    if content_type:
-        upload_args["content_type"] = content_type
-    container.upload_blob(blob_name, data, **upload_args)
+
+    content_settings = (
+        ContentSettings(content_type=content_type)
+        if content_type is not None
+        else None
+    )
+    container.upload_blob(
+        blob_name,
+        data,
+        overwrite=True,
+        content_settings=content_settings,
+    )
     logging.info("Saved blob: %s/%s", container_name, blob_name)
 
 def load_blob(connection_string: str, container_name: str, blob_name: str) -> bytes | None:
