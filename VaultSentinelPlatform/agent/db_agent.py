@@ -1,4 +1,4 @@
-#pylint: disable=invalid-name, line-too-long, c-extension-no-member
+#pylint: disable=invalid-name, line-too-long, c-extension-no-member, too-many-lines
 """
 Vault Sentinel DB Agent for Azure AI
 ------------------------------------
@@ -14,7 +14,7 @@ import re
 import threading
 import time
 import urllib.parse
-from typing import Any, Dict, cast
+from typing import Any, Dict, Never, cast
 
 import pyodbc
 
@@ -347,7 +347,7 @@ class VaultSentinelDBAgent:
         *,
         cause: Exception | None = None,
         **details: Any,
-    ) -> None:
+    ) -> Never:
         """Raise a `QueryValidationError` with structured field details."""
         error = QueryValidationError(message, details=details)
         if cause is None:
@@ -360,7 +360,7 @@ class VaultSentinelDBAgent:
         *,
         cause: Exception | None = None,
         **details: Any,
-    ) -> None:
+    ) -> Never:
         """Raise a `DependencyUnavailableError` with structured platform details."""
         error = DependencyUnavailableError(message, details=details)
         if cause is None:

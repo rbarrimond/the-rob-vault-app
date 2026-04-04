@@ -157,4 +157,3 @@ def test_persist_vault_translates_sqlalchemy_failures_to_dependency_errors() -> 
             agent.persist_vault(SimpleNamespace(items=[]), "member-1", "3")
 
     assert exc_info.value.__cause__ is not None
-
