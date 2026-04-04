@@ -1,6 +1,6 @@
 """Unit tests for the manifest SQLite query service."""
 
-# pylint: disable=import-error
+# pylint: disable=import-error,protected-access
 
 from __future__ import annotations
 

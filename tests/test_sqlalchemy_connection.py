@@ -1,4 +1,5 @@
 """Quick connectivity check using SQLAlchemy with the Azure SQL settings."""
+# pylint: disable=protected-access
 
 import json
 import os
@@ -18,6 +19,7 @@ def _load_local_settings():
 
 
 def main():
+    """Main function to test SQLAlchemy connection."""
     _load_local_settings()
 
     server = os.getenv("AZURE_SQL_SERVER")
@@ -28,7 +30,7 @@ def main():
     disable_pooling = os.getenv("SQL_DISABLE_ODBC_POOLING", "false").lower() in {"1", "true", "yes"}
 
     # Disable pyodbc-level pooling before any connections are created when requested
-    import pyodbc  # pylint: disable=import-outside-toplevel, import-outside-module
+    import pyodbc  # pylint: disable=import-outside-toplevel
     if disable_pooling:
         pyodbc.pooling = False
 

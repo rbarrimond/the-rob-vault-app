@@ -1,6 +1,6 @@
 """Unit tests for the Vault Sentinel platform exception hierarchy."""
 
-# pylint: disable=import-error
+# pylint: disable=import-error,protected-access
 from VaultSentinelPlatform.exceptions import (
     BusinessRuleViolationError,
     DependencyUnavailableError,

@@ -1,5 +1,5 @@
 """Unit tests for VaultSentinelDBAgent."""
-# pylint: disable=import-error
+# pylint: disable=import-error,protected-access
 from unittest.mock import MagicMock, patch
 
 import pytest

@@ -1,3 +1,7 @@
+"""Test connection to Azure SQL Database using pyodbc.
+This serves as a quick check for connectivity and driver configuration issues.
+"""
+# pylint: disable=protected-access,broad-exception-caught
 
 import os
 import json

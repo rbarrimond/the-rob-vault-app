@@ -1,4 +1,4 @@
-# pylint: disable=import-error,no-name-in-module
+# pylint: disable=import-error,no-name-in-module,protected-access
 """Unit tests for shared Azure Functions utilities."""
 
 from __future__ import annotations
