@@ -27,12 +27,12 @@ JSON_MIMETYPE = "application/json"
 INVALID_PAGINATION_MESSAGE = "Invalid limit or offset parameter."
 
 try:
-    PYODBC_ERROR = pyodbc.Error  # pylint: disable=c-extension-no-member
+    PYODBC_ERROR = pyodbc.Error  # pylint: disable=c-extension-no-member,invalid-name
 except AttributeError:  # pragma: no cover
     class PyodbcRuntimeError(Exception):
         """Fallback pyodbc error type when the C extension cannot expose members."""
 
-    PYODBC_ERROR = PyodbcRuntimeError
+    PYODBC_ERROR = PyodbcRuntimeError  # pylint: disable=invalid-name
 
 
 def json_http_response(
