@@ -43,16 +43,16 @@ norecursedirs = ["__pycache__"]
 max-line-length = 120
 
 [tool.setuptools]
-packages = ["VaultSentinelPlatform", "VaultSentinelPlatform.manifest"]
+packages = [
+    "VaultSentinelPlatform",
+    "VaultSentinelPlatform.agent",
+    "VaultSentinelPlatform.api",
+    "VaultSentinelPlatform.bungie",
+    "VaultSentinelPlatform.common",
+    "VaultSentinelPlatform.manifest",
+    "VaultSentinelPlatform.vault",
+]
 py-modules = [
-    "bungie_session_manager",
-    "constants",
     "function_app",
-    "helpers",
-    "utils",
     "manifest_cache",
-    "manifest_identity",
-    "models",
-    "vault_assistant",
-    "vault_sentinel_db_agent",
 ]

@@ -11,16 +11,26 @@ Responsibilities:
 import logging
 import os
 import threading
+from _thread import LockType
 from datetime import datetime, timezone
+from typing import ClassVar
 
 import requests
 from azure.core.exceptions import (AzureError, ResourceExistsError,
                                    ResourceNotFoundError)
 from azure.data.tables import TableServiceClient
 
-from constants import (API_KEY, BUNGIE_API_BASE, REQUEST_TIMEOUT,
-                       STORAGE_CONNECTION_STRING, TABLE_NAME)
-from helpers import retry_request
+from VaultSentinelPlatform.common.helpers import retry_request
+from VaultSentinelPlatform.config import (
+    API_KEY,
+    BUNGIE_API_BASE,
+    REQUEST_TIMEOUT,
+    STORAGE_CONNECTION_STRING,
+    TABLE_NAME,
+)
+
+
+ISSUED_AT_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 
 class BungieSessionManager:
@@ -34,20 +44,25 @@ class BungieSessionManager:
         - Persist and provide current session (access token, membershipId, membershipType)
     """
 
-    _instance = None
-    _lock:threading.Lock = None
+    _instance: ClassVar["BungieSessionManager | None"] = None
+    _lock: ClassVar[LockType | None] = None
 
     @classmethod
-    def instance(cls, *args, **kwargs):
+    def _get_lock(cls) -> LockType:
+        """Return the singleton lock, creating it on first use."""
+        if cls._lock is None:
+            cls._lock = threading.Lock()
+        return cls._lock
+
+    @classmethod
+    def instance(cls, *args, **kwargs) -> "BungieSessionManager":
         """
         Singleton factory method for BungieSessionManager.
         Ensures token is valid on first creation.
         """
-        if cls._lock is None:
-            cls._lock = threading.Lock()
         if cls._instance is None:
             #pylint: disable=protected-access, not-context-manager
-            with cls._lock:
+            with cls._get_lock():
                 if cls._instance is None:
                     cls._instance = cls(*args, **kwargs)
                     cls._instance._ensure_token_valid()
@@ -55,8 +70,8 @@ class BungieSessionManager:
 
     def __init__(
         self,
-        api_key: str = API_KEY,
-        storage_conn_str: str = STORAGE_CONNECTION_STRING,
+        api_key: str | None = API_KEY,
+        storage_conn_str: str | None = STORAGE_CONNECTION_STRING,
         table_name: str = TABLE_NAME,
         api_base: str = BUNGIE_API_BASE,
         timeout: int = REQUEST_TIMEOUT
@@ -71,14 +86,22 @@ class BungieSessionManager:
             api_base (str): Bungie API base URL.
             timeout (int): Request timeout in seconds.
         """
-        self.api_key = api_key
-        self.storage_conn_str = storage_conn_str
+        self.api_key = api_key or ""
+        self.storage_conn_str = storage_conn_str or ""
         self.table_name = table_name
         self.api_base = api_base
         self.timeout = timeout
         self._token_expiry_margin = 60  # seconds before expiry to refresh
         self._session_cache = None  # In-memory cache for session entity
         self._session_last_checked = None
+
+    def _get_table_client(self):
+        """Return the session table client when storage is configured, else `None`."""
+        if not self.storage_conn_str:
+            logging.warning("[session] Azure Storage connection string is not configured.")
+            return None
+        table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
+        return table_service.get_table_client(self.table_name)
 
     def _get_token_entity(self) -> dict | None:
         """
@@ -87,8 +110,9 @@ class BungieSessionManager:
         Returns:
             dict | None: Token entity if found, else None.
         """
-        table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
-        table_client = table_service.get_table_client(self.table_name)
+        table_client = self._get_table_client()
+        if table_client is None:
+            return None
         try:
             entity = table_client.get_entity(partition_key="AuthSession", row_key="last")
             self._session_cache = entity
@@ -118,12 +142,39 @@ class BungieSessionManager:
         if not issued_at:
             return True
         try:
-            issued_at_dt = datetime.strptime(issued_at, "%Y-%m-%dT%H:%M:%S")
+            issued_at_dt = datetime.strptime(issued_at, ISSUED_AT_FORMAT)
         except (TypeError, ValueError):
             return True
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         elapsed = (now - issued_at_dt).total_seconds()
         return elapsed > (expires_in - self._token_expiry_margin)
+
+    def _persist_session_entity(self, entity: dict, *, context: str) -> None:
+        """Persist the session entity when table storage is configured."""
+        table_client = self._get_table_client()
+        if table_client is None:
+            return
+        try:
+            table_client.upsert_entity(entity=entity)
+        except AzureError as exc:
+            logging.warning("[session] Azure Table upsert failed during %s: %s", context, exc)
+
+    def _refresh_cached_entity(self, entity: dict, refresh_token_val: str) -> None:
+        """Refresh the cached token payload and persist the updated session entity."""
+        try:
+            token_data, _ = self.refresh_token(refresh_token_val)
+        except (requests.RequestException, AzureError, KeyError, ValueError) as exc:
+            logging.error("[session] Token refresh failed; using cached entity if available: %s", exc)
+            return
+
+        entity.update({
+            "AccessToken": token_data.get("access_token", ""),
+            "RefreshToken": token_data.get("refresh_token", ""),
+            "ExpiresIn": str(token_data.get("expires_in", "3600")),
+            "IssuedAt": datetime.now(timezone.utc).strftime(ISSUED_AT_FORMAT),
+        })
+        self._persist_session_entity(entity, context="refresh")
+        self._session_cache = entity
 
     def _ensure_token_valid(self) -> dict | None:
         """
@@ -132,36 +183,14 @@ class BungieSessionManager:
         Returns:
             dict | None: Valid token entity, or None if not found.
         """
-        # Use cache if available
-        entity = self._session_cache
-        if entity is None:
-            # First time: fetch from table
-            entity = self._get_token_entity()
+        entity = self._session_cache or self._get_token_entity()
         if not entity:
             return None
         if self._is_token_expired(entity):
-            # Token expired, refresh from Bungie API
             refresh_token_val = entity.get("RefreshToken")
             if refresh_token_val:
-                try:
-                    token_data, _ = self.refresh_token(refresh_token_val)
-                    entity.update({
-                        "AccessToken": token_data.get("access_token", ""),
-                        "RefreshToken": token_data.get("refresh_token", ""),
-                        "ExpiresIn": str(token_data.get("expires_in", "3600")),
-                        "IssuedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-                    })
-                    table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
-                    table_client = table_service.get_table_client(self.table_name)
-                    try:
-                        table_client.upsert_entity(entity=entity)
-                    except AzureError as e:
-                        logging.warning("[session] Azure Table upsert failed during refresh: %s", e)
-                    self._session_cache = entity
-                except (requests.RequestException, AzureError, KeyError, ValueError) as e:
-                    logging.error("[session] Token refresh failed; using cached entity if available: %s", e)
+                self._refresh_cached_entity(entity, refresh_token_val)
         else:
-            # Token is valid, just use cache
             self._session_cache = entity
         return self._session_cache
 
@@ -203,14 +232,14 @@ class BungieSessionManager:
         except (KeyError, ValueError) as e:
             logging.warning("[session] Could not parse membership info: %s", e)
         # Store in Table Storage
-        table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
-        table_client = table_service.get_table_client(self.table_name)
-        try:
-            table_client.create_table()
-        except ResourceExistsError:
-            pass
-        except AzureError as e:
-            logging.warning("[session] Azure Table error on create_table: %s", e)
+        table_client = self._get_table_client()
+        if table_client is not None:
+            try:
+                table_client.create_table()
+            except ResourceExistsError:
+                pass
+            except AzureError as e:
+                logging.warning("[session] Azure Table error on create_table: %s", e)
         token_entity = {
             "PartitionKey": "AuthSession",
             "RowKey": "last",
@@ -219,13 +248,14 @@ class BungieSessionManager:
             "ExpiresIn": str(token_data.get("expires_in", "3600")),
             "membershipId": membership_id_val,
             "membershipType": membership_type_val,
-            "IssuedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            "IssuedAt": datetime.now(timezone.utc).strftime(ISSUED_AT_FORMAT)
         }
-        try:
-            table_client.upsert_entity(entity=token_entity)
-            logging.info("[session] Token data stored in table storage for session.")
-        except AzureError as e:
-            logging.warning("[session] Azure Table error on upsert_entity: %s", e)
+        if table_client is not None:
+            try:
+                table_client.upsert_entity(entity=token_entity)
+                logging.info("[session] Token data stored in table storage for session.")
+            except AzureError as e:
+                logging.warning("[session] Azure Table error on upsert_entity: %s", e)
         # Update in-memory cache after token exchange
         self._session_cache = token_entity
         return token_data

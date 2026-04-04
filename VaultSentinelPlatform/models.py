@@ -18,9 +18,9 @@ from sqlalchemy import (BigInteger, Boolean, Column, DateTime, ForeignKey,
                         text)
 from sqlalchemy.orm import declarative_base, relationship
 
-from bungie_session_manager import BungieSessionManager
-from helpers import retry_request
-from manifest_cache import ManifestCache
+from VaultSentinelPlatform.bungie.session_manager import BungieSessionManager
+from VaultSentinelPlatform.common.helpers import retry_request
+from VaultSentinelPlatform.manifest.cache import ManifestCache
 
 
 SYSUTCDATETIME_SQL = "SYSUTCDATETIME()"

@@ -10,8 +10,7 @@ import json
 import azure.functions as func
 import pytest
 
-from VaultSentinelPlatform.exceptions import DependencyUnavailableError
-from utils import (
+from VaultSentinelPlatform.api.http_utils import (
     build_save_response,
     compute_refresh_schedule,
     compress_response_if_requested,
@@ -20,6 +19,7 @@ from utils import (
     json_http_response,
     parse_pagination_params,
 )
+from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 
 
 def make_request(

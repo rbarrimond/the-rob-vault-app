@@ -6,8 +6,12 @@ import logging
 import threading
 from typing import Optional
 
-from constants import (BUNGIE_API_BASE, DEFAULT_HEADERS, REQUEST_TIMEOUT,
-                       STORAGE_CONNECTION_STRING)
+from VaultSentinelPlatform.config import (
+    BUNGIE_API_BASE,
+    DEFAULT_HEADERS,
+    REQUEST_TIMEOUT,
+    STORAGE_CONNECTION_STRING,
+)
 from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 from .blob_store import ManifestBlobStore
 from .query_service import ManifestSQLiteQueryService

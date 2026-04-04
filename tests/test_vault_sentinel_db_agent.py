@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from VaultSentinelPlatform.agent.db_agent import VaultSentinelDBAgent
 from VaultSentinelPlatform.exceptions import QueryValidationError
-from vault_sentinel_db_agent import VaultSentinelDBAgent
 
 
 def get_valid_query():

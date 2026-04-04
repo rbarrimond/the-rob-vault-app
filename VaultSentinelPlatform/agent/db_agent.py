@@ -31,18 +31,26 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SaTimeoutError
 from sqlalchemy.pool import NullPool
 
+from VaultSentinelPlatform.common.helpers import compute_hash
+from VaultSentinelPlatform.config import (
+    OPENAI_API_KEY,
+    OPENAI_API_VERSION,
+    OPENAI_DEPLOYMENT,
+    OPENAI_ENDPOINT,
+    SQL_DATABASE,
+    SQL_DISABLE_ODBC_POOLING,
+    SQL_DRIVER,
+    SQL_PASSWORD,
+    SQL_SERVER,
+    SQL_USER,
+)
 from VaultSentinelPlatform.exceptions import (
     BusinessRuleViolationError,
     DependencyUnavailableError,
     QueryValidationError,
 )
-from constants import (
-    OPENAI_API_KEY, OPENAI_API_VERSION, OPENAI_DEPLOYMENT,
-    OPENAI_ENDPOINT, SQL_DATABASE, SQL_DRIVER, SQL_SERVER,
-    SQL_USER, SQL_PASSWORD, SQL_DISABLE_ODBC_POOLING
-)
-from helpers import compute_hash
-from models import (
+from VaultSentinelPlatform.manifest.identity import race_name_to_hash
+from VaultSentinelPlatform.models import (
     Character,
     Item,
     ItemEnergy,
@@ -54,7 +62,6 @@ from models import (
     User,
     Vault,
 )
-from manifest_identity import race_name_to_hash
 
 
 class VaultSentinelDBAgent:

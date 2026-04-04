@@ -10,8 +10,8 @@ import threading
 from collections import defaultdict
 from typing import Any, Optional, Sequence
 
-from constants import BUNGIE_REQUIRED_DEFS
-from helpers import normalize_item_hash
+from VaultSentinelPlatform.common.helpers import normalize_item_hash
+from VaultSentinelPlatform.config import BUNGIE_REQUIRED_DEFS
 from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 
 

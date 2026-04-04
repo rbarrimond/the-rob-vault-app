@@ -7,7 +7,7 @@ canonical hash/name lookups without duplicating logic across modules.
 from functools import lru_cache
 from typing import Dict, Tuple
 
-from manifest_cache import ManifestCache
+from VaultSentinelPlatform.manifest.cache import ManifestCache
 
 _DEFINITION_CLASS = "DestinyClassDefinition"
 _DEFINITION_RACE = "DestinyRaceDefinition"
@@ -90,4 +90,3 @@ def gender_name_to_hash() -> Dict[str, int]:
     """Return a copy of the gender name->hash dictionary."""
     _, name_map = _gender_maps()
     return name_map.copy()
-

@@ -24,7 +24,7 @@ import psutil
 from requests.exceptions import RequestException
 from sqlalchemy.exc import SQLAlchemyError
 
-from utils import (
+from VaultSentinelPlatform.api.http_utils import (
     INVALID_PAGINATION_MESSAGE,
     PYODBC_ERROR,
     build_save_response,
@@ -35,7 +35,7 @@ from utils import (
     json_http_response,
     parse_pagination_params,
 )
-from vault_assistant import VaultAssistant
+from VaultSentinelPlatform.vault.assistant import VaultAssistant
 
 # NOTE: Logging bootstrap for Azure Functions
 # We intentionally configure root logging early so that:
