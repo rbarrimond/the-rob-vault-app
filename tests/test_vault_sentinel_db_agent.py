@@ -67,3 +67,32 @@ def test_get_session_with_cold_start_handling_translates_sqlalchemy_error() -> N
 
     assert exc_info.value.details["dependency"] == "database_session"
     assert exc_info.value.__cause__ is not None
+
+
+def test_process_query_redacts_dependency_error_details() -> None:
+    """HTTP-facing query failures should not expose raw infrastructure exception text."""
+    VaultSentinelDBAgent.reset_instance()
+    agent = VaultSentinelDBAgent.instance()
+    agent.chat_client = MagicMock()
+    agent.chat_client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content="SELECT * FROM items"))]
+    )
+    agent.session_factory = MagicMock()
+
+    with (
+        patch("builtins.open", MagicMock()),
+        patch.object(
+            agent,
+            "_get_session_with_cold_start_handling",
+            side_effect=DependencyUnavailableError(
+                "driver offline",
+                details={"dependency": "database_session"},
+            ),
+        ),
+    ):
+        result = agent.process_query(get_valid_query())
+
+    assert result == {
+        "status": "error",
+        "error": "Database dependency unavailable. Check configuration and logs.",
+    }

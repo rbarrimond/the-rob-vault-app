@@ -43,6 +43,7 @@ from VaultSentinelPlatform.config import (
     STORAGE_CONNECTION_STRING,
     TABLE_NAME,
 )
+from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 from VaultSentinelPlatform.manifest.cache import ManifestCache
 from VaultSentinelPlatform.models import CharacterModel, ItemModel, VaultModel
 
@@ -352,6 +353,11 @@ class VaultAssistant:
             try:
                 bungie_last_modified_dt = datetime.strptime(bungie_last_modified, "%Y-%m-%dT%H:%M:%SZ")
             except ValueError:
+                logging.warning(
+                    "Unable to parse Bungie profile timestamp '%s' for membership %s.",
+                    bungie_last_modified,
+                    membership_id,
+                )
                 bungie_last_modified_dt = None
         else:
             bungie_last_modified_dt = None
@@ -369,8 +375,8 @@ class VaultAssistant:
         """
         try:
             agent = VaultSentinelDBAgent.instance()
-        except RuntimeError as e:
-            logging.error("Failed to obtain DB agent instance (runtime): %s", e)
+        except RuntimeError as exc:
+            logging.error("Failed to obtain DB agent instance: %s", exc, exc_info=True)
             return {"status": "error", "error": "DB agent unavailable. Check configuration and logs."}
         # Allow graceful error if underlying services not configured
         if not getattr(agent, "session_factory", None):
@@ -617,8 +623,12 @@ class VaultAssistant:
                 db_agent = VaultSentinelDBAgent.instance()
                 if getattr(db_agent, "session_factory", None):
                     db_agent.persist_vault(vault_model, membership_id, membership_type)
-            except (RuntimeError, AttributeError, SQLAlchemyError) as e:  # type: ignore[arg-type]
-                logging.warning("Skipping DB persist_vault due to initialization error: %s", e)
+            except (DependencyUnavailableError, SQLAlchemyError) as exc:  # type: ignore[arg-type]
+                logging.warning(
+                    "Skipping DB persist_vault because the database dependency is unavailable: %s",
+                    exc,
+                    exc_info=True,
+                )
 
         if should_sync:
             save_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, json.dumps(decoded_items_full))
@@ -705,8 +715,12 @@ class VaultAssistant:
                 db_agent = VaultSentinelDBAgent.instance()
                 if getattr(db_agent, "session_factory", None):
                     db_agent.persist_characters(character_models, membership_id, membership_type)
-            except (RuntimeError, AttributeError, SQLAlchemyError) as e:  # type: ignore[arg-type]
-                logging.warning("Skipping DB persist_characters due to initialization error: %s", e)
+            except (DependencyUnavailableError, SQLAlchemyError) as exc:  # type: ignore[arg-type]
+                logging.warning(
+                    "Skipping DB persist_characters because the database dependency is unavailable: %s",
+                    exc,
+                    exc_info=True,
+                )
         if should_sync:
             save_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, json.dumps(decoded_characters_full))
 
@@ -753,9 +767,9 @@ class VaultAssistant:
             blob_url = f"{container_url}/{filename}"
             logging.info("Saved MIME object as blob: %s", blob_url)
             return {"message": "Object saved successfully.", "blob": filename, "url": blob_url}, 200
-        except (AzureError, TypeError, ValueError) as e:  # type: ignore[arg-type]
-            logging.error("Failed to save MIME object: %s", e)
-            return {"error": f"Failed to save object: {e}"}, 500
+        except (AzureError, TypeError, ValueError) as exc:  # type: ignore[arg-type]
+            logging.error("Failed to save MIME object: %s", exc, exc_info=True)
+            return {"error": "Failed to save object. Check logs."}, 500
 
     def get_item_full_info(self, item_hash: str, item_instance_id: str | None = None) -> tuple[dict | None, int]:
         """

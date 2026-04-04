@@ -73,6 +73,7 @@ class VaultSentinelDBAgent:
 
     _instance = None
     _DB_SESSION_ERROR_TEMPLATE = "Failed to get database session: %s"
+    _DATABASE_UNAVAILABLE_MESSAGE = "Database dependency unavailable. Check configuration and logs."
     _COLD_START_INDICATORS = (
         "login timeout",
         "connection timeout",
@@ -454,11 +455,17 @@ class VaultSentinelDBAgent:
             logging.error("Azure OpenAI service error: %s", e)
             return {"status": "error", "error": "Azure OpenAI service error. Try again later."}
         except DependencyUnavailableError as e:
-            logging.error("process_query dependency error: %s", e)
-            return {"status": "error", "error": str(e)}
+            logging.error("process_query dependency error: %s", e, exc_info=True)
+            return {
+                "status": "error",
+                "error": self._DATABASE_UNAVAILABLE_MESSAGE,
+            }
         except (SQLAlchemyError, pyodbc.Error, ValueError) as e:
-            logging.error("process_query DB/validation error: %s", e)
-            return {"status": "error", "error": str(e)}
+            logging.error("process_query DB/validation error: %s", e, exc_info=True)
+            return {
+                "status": "error",
+                "error": "Database query failed. Check logs.",
+            }
         # Let unexpected errors (e.g., OpenAI SDK) propagate to the caller
 
     # --- SQL Validation ---
@@ -845,8 +852,11 @@ class VaultSentinelDBAgent:
         try:
             session = self._get_session_with_cold_start_handling()
         except DependencyUnavailableError as e:
-            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e)
-            return {"status": "error", "error": str(e)}
+            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e, exc_info=True)
+            return {
+                "status": "error",
+                "error": self._DATABASE_UNAVAILABLE_MESSAGE,
+            }
 
         try:
             user_obj = self._get_or_create_user(session, membership_id, membership_type)
@@ -860,8 +870,11 @@ class VaultSentinelDBAgent:
             return {"status": "success"}
         except (SQLAlchemyError, pyodbc.Error) as e:
             session.rollback()
-            logging.error("Failed to persist vault: %s", e)
-            return {"status": "error", "error": str(e)}
+            logging.error("Failed to persist vault: %s", e, exc_info=True)
+            return {
+                "status": "error",
+                "error": "Failed to persist vault data. Check logs.",
+            }
         finally:
             session.close()
 
@@ -878,8 +891,11 @@ class VaultSentinelDBAgent:
         try:
             session = self._get_session_with_cold_start_handling()
         except DependencyUnavailableError as e:
-            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e)
-            return {"status": "error", "error": str(e)}
+            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e, exc_info=True)
+            return {
+                "status": "error",
+                "error": self._DATABASE_UNAVAILABLE_MESSAGE,
+            }
 
         try:
             user_obj = self._get_or_create_user(session, membership_id, membership_type)
@@ -900,8 +916,11 @@ class VaultSentinelDBAgent:
             return {"status": "success"}
         except (SQLAlchemyError, pyodbc.Error) as e:
             session.rollback()
-            logging.error("Failed to persist characters: %s", e)
-            return {"status": "error", "error": str(e)}
+            logging.error("Failed to persist characters: %s", e, exc_info=True)
+            return {
+                "status": "error",
+                "error": "Failed to persist character data. Check logs.",
+            }
         finally:
             session.close()
 
@@ -918,8 +937,11 @@ class VaultSentinelDBAgent:
         try:
             session = self._get_session_with_cold_start_handling()
         except DependencyUnavailableError as e:
-            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e)
-            return {"status": "error", "error": str(e)}
+            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e, exc_info=True)
+            return {
+                "status": "error",
+                "error": self._DATABASE_UNAVAILABLE_MESSAGE,
+            }
 
         try:
             self._persist_item_record(session, item_model, character_id=character_id, vault_id=vault_id)
@@ -927,8 +949,11 @@ class VaultSentinelDBAgent:
             return {"status": "success"}
         except (SQLAlchemyError, pyodbc.Error) as e:
             session.rollback()
-            logging.error("Failed to persist item: %s", e)
-            return {"status": "error", "error": str(e)}
+            logging.error("Failed to persist item: %s", e, exc_info=True)
+            return {
+                "status": "error",
+                "error": "Failed to persist item data. Check logs.",
+            }
         finally:
             session.close()
 
