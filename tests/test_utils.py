@@ -9,6 +9,7 @@ import json
 
 import azure.functions as func
 import pytest
+from requests.exceptions import RequestException
 
 from VaultSentinelPlatform.api.http_utils import (
     build_save_response,
@@ -19,6 +20,7 @@ from VaultSentinelPlatform.api.http_utils import (
     json_http_response,
     parse_pagination_params,
 )
+from VaultSentinelPlatform.common.helpers import retry_request
 from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 
 
@@ -97,6 +99,20 @@ def test_compute_refresh_schedule_uses_default_and_disable_cases() -> None:
     """Refresh schedule computation should preserve the current timer semantics."""
     assert compute_refresh_schedule(None) == ("0 */30 * * * *", 30)
     assert compute_refresh_schedule("-1") == (None, None)
+
+
+def test_retry_request_wraps_request_failures_as_typed_dependency_errors() -> None:
+    """Repeated request failures should preserve dependency semantics and causality."""
+    outage = RequestException("gateway reset")
+
+    def _failing_request(_url: str, **_kwargs):
+        raise outage
+
+    with pytest.raises(DependencyUnavailableError, match="Request failed after 2 attempts") as exc_info:
+        retry_request(_failing_request, "https://example.test", tries=2, delay=0)
+
+    assert exc_info.value.__cause__ is outage
+    assert exc_info.value.details == {"dependency": "http_request", "url": "https://example.test", "tries": 2}
 
 
 def test_endpoint_decorator_passes_through_http_response() -> None:

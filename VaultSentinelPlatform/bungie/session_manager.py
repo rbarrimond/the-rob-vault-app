@@ -28,6 +28,7 @@ from VaultSentinelPlatform.config import (
     STORAGE_CONNECTION_STRING,
     TABLE_NAME,
 )
+from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 
 
 ISSUED_AT_FORMAT = "%Y-%m-%dT%H:%M:%S"
@@ -65,7 +66,14 @@ class BungieSessionManager:
             with cls._get_lock():
                 if cls._instance is None:
                     cls._instance = cls(*args, **kwargs)
-                    cls._instance._ensure_token_valid()
+                    try:
+                        cls._instance._ensure_token_valid()
+                    except DependencyUnavailableError as exc:
+                        logging.warning(
+                            "[session] Initial token validation skipped because session storage is unavailable: %s",
+                            exc,
+                            exc_info=True,
+                        )
         return cls._instance
 
     def __init__(
@@ -95,13 +103,35 @@ class BungieSessionManager:
         self._session_cache = None  # In-memory cache for session entity
         self._session_last_checked = None
 
+    @staticmethod
+    def _raise_dependency_unavailable(
+        message: str,
+        *,
+        cause: Exception | None = None,
+        **details,
+    ) -> None:
+        """Raise a typed dependency error while preserving the original cause."""
+        error = DependencyUnavailableError(message, details=details)
+        if cause is None:
+            raise error
+        raise error from cause
+
     def _get_table_client(self):
         """Return the session table client when storage is configured, else `None`."""
         if not self.storage_conn_str:
             logging.warning("[session] Azure Storage connection string is not configured.")
             return None
-        table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
-        return table_service.get_table_client(self.table_name)
+        try:
+            table_service = TableServiceClient.from_connection_string(self.storage_conn_str)
+            return table_service.get_table_client(self.table_name)
+        except (AzureError, ValueError) as exc:
+            logging.error("[session] Failed to initialize Azure Table client: %s", exc, exc_info=True)
+            self._raise_dependency_unavailable(
+                "Session storage is unavailable.",
+                cause=exc,
+                dependency="azure_table_storage",
+                table=self.table_name,
+            )
 
     def _get_token_entity(self) -> dict | None:
         """
@@ -119,9 +149,14 @@ class BungieSessionManager:
             return entity
         except ResourceNotFoundError:
             return None
-        except AzureError as e:
-            logging.error("Azure Table error in _get_token_entity: %s", e)
-            return None
+        except AzureError as exc:
+            logging.error("Azure Table error in _get_token_entity: %s", exc, exc_info=True)
+            self._raise_dependency_unavailable(
+                "Session storage is unavailable.",
+                cause=exc,
+                dependency="azure_table_storage",
+                table=self.table_name,
+            )
 
     def _is_token_expired(self, entity: dict | None = None) -> bool:
         """
@@ -151,20 +186,33 @@ class BungieSessionManager:
 
     def _persist_session_entity(self, entity: dict, *, context: str) -> None:
         """Persist the session entity when table storage is configured."""
-        table_client = self._get_table_client()
+        try:
+            table_client = self._get_table_client()
+        except DependencyUnavailableError as exc:
+            logging.warning(
+                "[session] Session entity persistence skipped during %s because storage is unavailable: %s",
+                context,
+                exc,
+                exc_info=True,
+            )
+            return
         if table_client is None:
             return
         try:
             table_client.upsert_entity(entity=entity)
         except AzureError as exc:
-            logging.warning("[session] Azure Table upsert failed during %s: %s", context, exc)
+            logging.warning("[session] Azure Table upsert failed during %s: %s", context, exc, exc_info=True)
 
     def _refresh_cached_entity(self, entity: dict, refresh_token_val: str) -> None:
         """Refresh the cached token payload and persist the updated session entity."""
         try:
             token_data, _ = self.refresh_token(refresh_token_val)
-        except (requests.RequestException, AzureError, KeyError, ValueError) as exc:
-            logging.error("[session] Token refresh failed; using cached entity if available: %s", exc)
+        except (requests.RequestException, DependencyUnavailableError, TypeError, ValueError) as exc:
+            logging.warning(
+                "[session] Token refresh failed; using cached entity if available: %s",
+                exc,
+                exc_info=True,
+            )
             return
 
         entity.update({
@@ -227,19 +275,23 @@ class BungieSessionManager:
             membership_info = self._get_membership_info(access_token_val)
             if membership_info:
                 membership_id_val, membership_type_val = membership_info
-        except requests.RequestException as e:
-            logging.warning("[session] Could not retrieve membership info due to network error: %s", e)
-        except (KeyError, ValueError) as e:
-            logging.warning("[session] Could not parse membership info: %s", e)
+        except (requests.RequestException, DependencyUnavailableError) as exc:
+            logging.warning(
+                "[session] Could not retrieve membership info due to dependency error: %s",
+                exc,
+                exc_info=True,
+            )
+        except (TypeError, ValueError) as exc:
+            logging.warning("[session] Could not parse membership info: %s", exc, exc_info=True)
         # Store in Table Storage
         table_client = self._get_table_client()
         if table_client is not None:
             try:
                 table_client.create_table()
             except ResourceExistsError:
-                pass
-            except AzureError as e:
-                logging.warning("[session] Azure Table error on create_table: %s", e)
+                logging.debug("[session] Table '%s' already exists; continuing.", self.table_name)
+            except AzureError as exc:
+                logging.warning("[session] Azure Table error on create_table: %s", exc, exc_info=True)
         token_entity = {
             "PartitionKey": "AuthSession",
             "RowKey": "last",
@@ -254,8 +306,8 @@ class BungieSessionManager:
             try:
                 table_client.upsert_entity(entity=token_entity)
                 logging.info("[session] Token data stored in table storage for session.")
-            except AzureError as e:
-                logging.warning("[session] Azure Table error on upsert_entity: %s", e)
+            except AzureError as exc:
+                logging.warning("[session] Azure Table error on upsert_entity: %s", exc, exc_info=True)
         # Update in-memory cache after token exchange
         self._session_cache = token_entity
         return token_data

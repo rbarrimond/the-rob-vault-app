@@ -39,27 +39,40 @@ def retry_request(method: Callable[..., requests.Response], url: str, **kwargs) 
         requests.Response: The response object if successful.
 
     Raises:
-        RuntimeError: If all retry attempts fail.
+        DependencyUnavailableError: If the remote HTTP dependency remains unavailable.
     """
     tries = kwargs.pop("tries", 3)
     delay = kwargs.pop("delay", 1)
+    last_exception: requests.RequestException | None = None
+    last_status_code: int | None = None
     for attempt in range(tries):
         try:
             response = method(url, **kwargs)
             if response.ok:
                 return response
+            last_status_code = response.status_code
             logging.warning("Request failed (status %d): %s",
                             response.status_code, url)
         except requests.RequestException as exc:
+            last_exception = exc
             logging.warning("Request error on attempt %d: %s",
-                            attempt + 1, exc)
+                            attempt + 1, exc, exc_info=True)
         if attempt < tries - 1:
             logging.info(
                 "Retrying request in %d seconds (attempt %d/%d)", delay, attempt + 2, tries)
             time.sleep(delay)
             delay *= 2
     logging.error("Max retries exceeded for request: %s", url)
-    raise RuntimeError(f"Request failed after {tries} attempts: {url}")
+    details = {"dependency": "http_request", "url": url, "tries": tries}
+    if last_status_code is not None:
+        details["status_code"] = last_status_code
+    error = DependencyUnavailableError(
+        f"Request failed after {tries} attempts: {url}",
+        details=details,
+    )
+    if last_exception is not None:
+        raise error from last_exception
+    raise error
 
 def normalize_item_hash(item_hash: int | str) -> str:
     """

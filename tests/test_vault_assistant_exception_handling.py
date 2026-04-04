@@ -1,4 +1,5 @@
 # pyright: reportMissingImports=false
+# pylint: disable=protected-access
 """Exception-handling regression tests for `VaultAssistant`."""
 
 from __future__ import annotations
@@ -8,7 +9,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from azure.core.exceptions import AzureError
+from sqlalchemy.exc import SQLAlchemyError
 
+from VaultSentinelPlatform.bungie.session_manager import BungieSessionManager
 from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 from VaultSentinelPlatform.vault.assistant import VaultAssistant
 
@@ -86,6 +89,33 @@ def test_decode_vault_degrades_gracefully_for_typed_dependency_errors() -> None:
     assert result == [{"itemHash": "123"}]
 
 
+def test_decode_vault_propagates_raw_sqlalchemy_errors() -> None:
+    """Raw ORM failures should not be swallowed at the assistant boundary."""
+    assistant = _build_assistant()
+    fake_vault_model = SimpleNamespace(items=[_FakeItem({"itemHash": "123"})])
+    fake_db_agent = SimpleNamespace(
+        session_factory=object(),
+        persist_vault=MagicMock(side_effect=SQLAlchemyError("insert failed")),
+    )
+
+    with (
+        patch.object(assistant, "get_session", return_value={
+            "membership_id": "member-1",
+            "membership_type": "3",
+            "access_token": "token",
+        }),
+        patch.object(assistant, "get_bungie_profile_last_modified", return_value=(None, 200)),
+        patch("VaultSentinelPlatform.vault.assistant.load_blob", return_value=b"[{\"itemHash\": \"123\"}]"),
+        patch("VaultSentinelPlatform.vault.assistant.save_blob"),
+        patch.object(assistant, "_fetch_item_components_map", return_value={}),
+        patch("VaultSentinelPlatform.vault.assistant.VaultModel.from_components", return_value=fake_vault_model),
+        patch("VaultSentinelPlatform.vault.assistant.VaultSentinelDBAgent.is_db_configured", return_value=True),
+        patch("VaultSentinelPlatform.vault.assistant.VaultSentinelDBAgent.instance", return_value=fake_db_agent),
+    ):
+        with pytest.raises(SQLAlchemyError, match="insert failed"):
+            assistant.decode_vault()
+
+
 def test_decode_vault_propagates_unexpected_programming_errors() -> None:
     """Unexpected implementation bugs should not be silently swallowed as dependency issues."""
     assistant = _build_assistant()
@@ -111,3 +141,22 @@ def test_decode_vault_propagates_unexpected_programming_errors() -> None:
     ):
         with pytest.raises(AttributeError, match="programming bug"):
             assistant.decode_vault()
+
+
+def test_session_manager_get_token_entity_translates_azure_table_failures() -> None:
+    """Configured session storage outages should surface as typed dependency errors."""
+    manager = BungieSessionManager(
+        api_key="test-key",
+        storage_conn_str="UseDevelopmentStorage=true",
+        table_name="sessions",
+        api_base="https://example.test",
+        timeout=5,
+    )
+    fake_table = SimpleNamespace(get_entity=MagicMock(side_effect=AzureError("table unavailable")))
+
+    with patch.object(manager, "_get_table_client", return_value=fake_table):
+        with pytest.raises(DependencyUnavailableError, match="Session storage is unavailable") as exc_info:
+            manager._get_token_entity()
+
+    assert exc_info.value.__cause__ is not None
+    assert exc_info.value.details == {"dependency": "azure_table_storage", "table": "sessions"}

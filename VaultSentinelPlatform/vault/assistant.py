@@ -20,7 +20,6 @@ import requests
 from azure.core.exceptions import AzureError
 from azure.storage.blob import BlobServiceClient
 from requests.exceptions import RequestException
-from sqlalchemy.exc import SQLAlchemyError
 
 from VaultSentinelPlatform.agent.db_agent import VaultSentinelDBAgent
 from VaultSentinelPlatform.bungie.session_manager import BungieSessionManager
@@ -631,7 +630,7 @@ class VaultAssistant:
                 db_agent = VaultSentinelDBAgent.instance()
                 if getattr(db_agent, "session_factory", None):
                     db_agent.persist_vault(vault_model, membership_id, membership_type)
-            except (DependencyUnavailableError, SQLAlchemyError) as exc:  # type: ignore[arg-type]
+            except DependencyUnavailableError as exc:
                 logging.warning(
                     "Skipping DB persist_vault because the database dependency is unavailable: %s",
                     exc,
@@ -723,7 +722,7 @@ class VaultAssistant:
                 db_agent = VaultSentinelDBAgent.instance()
                 if getattr(db_agent, "session_factory", None):
                     db_agent.persist_characters(character_models, membership_id, membership_type)
-            except (DependencyUnavailableError, SQLAlchemyError) as exc:  # type: ignore[arg-type]
+            except DependencyUnavailableError as exc:
                 logging.warning(
                     "Skipping DB persist_characters because the database dependency is unavailable: %s",
                     exc,
