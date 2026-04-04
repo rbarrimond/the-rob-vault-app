@@ -121,9 +121,7 @@ class ManifestBlobStore:
                 self.container_name,
                 self.blob_name_for_version(version),
             )
-        except DependencyUnavailableError:
-            raise
-        except Exception as exc:  # pragma: no cover - dependency wrappers should handle the common cases
+        except (DependencyUnavailableError, RuntimeError, ValueError, TypeError, OSError) as exc:
             logging.error("Failed to load manifest blob for version %s: %s", version, exc, exc_info=True)
             self._raise_dependency_unavailable(
                 "Failed to load manifest blob from storage.",
@@ -148,9 +146,7 @@ class ManifestBlobStore:
                 self.blob_name_for_version(version),
                 payload,
             )
-        except DependencyUnavailableError:
-            raise
-        except Exception as exc:  # pragma: no cover - dependency wrappers should handle the common cases
+        except (DependencyUnavailableError, RuntimeError, ValueError, TypeError, OSError) as exc:
             logging.error("Failed to save manifest blob for version %s: %s", version, exc, exc_info=True)
             self._raise_dependency_unavailable(
                 "Failed to save manifest blob to storage.",
@@ -206,8 +202,6 @@ class ManifestBlobStore:
                     )
                 manifest_info = max(manifest_members, key=lambda info: info.file_size)
                 return archive.read(manifest_info.filename)
-        except DependencyUnavailableError:
-            raise
         except (KeyError, OSError, ValueError, zipfile.BadZipFile) as exc:
             logging.error("Failed to extract manifest ZIP: %s", exc, exc_info=True)
             self._raise_dependency_unavailable(
