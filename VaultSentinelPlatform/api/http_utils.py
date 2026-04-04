@@ -193,7 +193,10 @@ def endpoint(
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger_instance.error("[%s] Unhandled endpoint failure: %s", inner_fn.__name__, exc, exc_info=True)
-                return json_http_response({"error": str(exc)}, status_code=error_status)
+                return json_http_response(
+                    {"error": "Internal server error."},
+                    status_code=error_status,
+                )
 
             if isinstance(result, func.HttpResponse):
                 return result

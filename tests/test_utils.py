@@ -138,6 +138,19 @@ def test_endpoint_decorator_maps_dependency_error_to_503() -> None:
     assert json.loads(response.get_body().decode("utf-8")) == {"error": "storage unavailable"}
 
 
+def test_endpoint_decorator_hides_internal_error_details() -> None:
+    """Unhandled endpoint failures should not leak raw infrastructure details to clients."""
+
+    @endpoint()
+    def handler(_req: func.HttpRequest) -> dict[str, str]:
+        raise RuntimeError("tcp timeout to sql-prod-1")
+
+    response = handler(make_request())
+
+    assert response.status_code == 500
+    assert json.loads(response.get_body().decode("utf-8")) == {"error": "Internal server error."}
+
+
 def test_endpoint_decorator_preserves_compressed_response_headers() -> None:
     """Decorator pass-through should keep gzip response headers untouched."""
 

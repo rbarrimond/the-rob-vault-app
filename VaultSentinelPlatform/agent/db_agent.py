@@ -290,8 +290,8 @@ class VaultSentinelDBAgent:
             sqlalchemy.orm.Session: A SQLAlchemy session object.
 
         Raises:
-            DependencyUnavailableError: If the session dependency is not initialized.
-            RuntimeError: If the session cannot be created after multiple attempts.
+            DependencyUnavailableError: If the session dependency is not initialized
+                or the database session cannot be created after retry attempts.
         """
         if not self.session_factory:
             raise DependencyUnavailableError(
@@ -317,11 +317,27 @@ class VaultSentinelDBAgent:
                     )
                     time.sleep(delay)
                     continue
-                raise RuntimeError(f"Database session failed after {attempt + 1} attempts: {e}") from e
+                raise DependencyUnavailableError(
+                    "Database session is temporarily unavailable after retry attempts.",
+                    details={
+                        "dependency": "database_session",
+                        "attempts": attempt + 1,
+                        "cold_start": self._is_cold_start_error(e),
+                    },
+                ) from e
             except (SQLAlchemyError, pyodbc.Error) as e:
-                raise RuntimeError(f"Unexpected database error: {e}") from e
+                raise DependencyUnavailableError(
+                    "Database session is unavailable due to a database error.",
+                    details={
+                        "dependency": "database_session",
+                        "attempts": attempt + 1,
+                    },
+                ) from e
 
-        raise RuntimeError(f"Failed to create database session after {max_attempts} attempts")
+        raise DependencyUnavailableError(
+            "Database session is unavailable after retry attempts.",
+            details={"dependency": "database_session", "attempts": max_attempts},
+        )
 
     def validate_query(self, query: Dict[str, Any]) -> bool:
         """
@@ -437,6 +453,9 @@ class VaultSentinelDBAgent:
         except APIError as e:
             logging.error("Azure OpenAI service error: %s", e)
             return {"status": "error", "error": "Azure OpenAI service error. Try again later."}
+        except DependencyUnavailableError as e:
+            logging.error("process_query dependency error: %s", e)
+            return {"status": "error", "error": str(e)}
         except (SQLAlchemyError, pyodbc.Error, ValueError) as e:
             logging.error("process_query DB/validation error: %s", e)
             return {"status": "error", "error": str(e)}
@@ -825,7 +844,7 @@ class VaultSentinelDBAgent:
         """
         try:
             session = self._get_session_with_cold_start_handling()
-        except RuntimeError as e:
+        except DependencyUnavailableError as e:
             logging.error(self._DB_SESSION_ERROR_TEMPLATE, e)
             return {"status": "error", "error": str(e)}
 
@@ -858,7 +877,7 @@ class VaultSentinelDBAgent:
         """
         try:
             session = self._get_session_with_cold_start_handling()
-        except RuntimeError as e:
+        except DependencyUnavailableError as e:
             logging.error(self._DB_SESSION_ERROR_TEMPLATE, e)
             return {"status": "error", "error": str(e)}
 
@@ -898,7 +917,7 @@ class VaultSentinelDBAgent:
         """
         try:
             session = self._get_session_with_cold_start_handling()
-        except RuntimeError as e:
+        except DependencyUnavailableError as e:
             logging.error(self._DB_SESSION_ERROR_TEMPLATE, e)
             return {"status": "error", "error": str(e)}
 

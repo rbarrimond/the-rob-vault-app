@@ -3,9 +3,10 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from VaultSentinelPlatform.agent.db_agent import VaultSentinelDBAgent
-from VaultSentinelPlatform.exceptions import QueryValidationError
+from VaultSentinelPlatform.exceptions import DependencyUnavailableError, QueryValidationError
 
 
 def get_valid_query():
@@ -51,3 +52,18 @@ def test_process_query_invalid_query():
     invalid_query = {"intent": None}
     with pytest.raises(QueryValidationError):
         agent.process_query(invalid_query)
+
+
+def test_get_session_with_cold_start_handling_translates_sqlalchemy_error() -> None:
+    """Unexpected SQLAlchemy failures should surface as typed dependency errors."""
+    VaultSentinelDBAgent.reset_instance()
+    agent = VaultSentinelDBAgent.instance()
+    agent.session_factory = MagicMock()
+    agent._connection_warmed = True
+
+    with patch.object(agent, "_open_validated_session", side_effect=SQLAlchemyError("driver offline")):
+        with pytest.raises(DependencyUnavailableError) as exc_info:
+            agent._get_session_with_cold_start_handling()
+
+    assert exc_info.value.details["dependency"] == "database_session"
+    assert exc_info.value.__cause__ is not None
