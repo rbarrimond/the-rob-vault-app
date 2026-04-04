@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "the-rob-vault-app"
-version = "0.2.1"
+version = "0.3.0"
 description = "Azure Functions backend for Destiny 2 Vault Sentinel and Bungie vault automation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,7 +13,6 @@ dependencies = [
     "psutil",
     "requests",
     "azure-functions",
-    "cryptography==43.0.3",
     "azure-core",
     "azure-data-tables",
     "azure-storage-blob",
