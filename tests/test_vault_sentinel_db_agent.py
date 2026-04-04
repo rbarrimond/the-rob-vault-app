@@ -24,7 +24,7 @@ def test_process_query_success():
     """Test successful processing of a valid query."""
     VaultSentinelDBAgent.reset_instance()
     agent = VaultSentinelDBAgent.instance()
-    # Patch chat_client and Session
+    # Patch chat_client and session_factory
     agent.chat_client = MagicMock()
     agent.chat_client.chat.completions.create.return_value = MagicMock(
         choices=[MagicMock(message=MagicMock(content="SELECT * FROM items"))]
@@ -34,7 +34,7 @@ def test_process_query_success():
     mock_result.fetchall.return_value = [("item1", "stat1")]
     mock_result.keys.return_value = ["name", "stat"]
     mock_session.execute.return_value = mock_result
-    agent.Session = MagicMock(return_value=mock_session)
+    agent.session_factory = MagicMock(return_value=mock_session)
 
     with patch("builtins.open", MagicMock()), patch("json.dumps", MagicMock()):
         result = agent.process_query(get_valid_query())

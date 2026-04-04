@@ -1,9 +1,9 @@
-#pylint: disable=invalid-name, line-too-long
+#pylint: disable=invalid-name, line-too-long, c-extension-no-member
 """
 Vault Sentinel DB Agent for Azure AI
 ------------------------------------
-This module implements a secure, schema-compliant agent that processes Destiny 2 gear queries using Azure AI. 
-All queries must conform to the embedded schema. The agent uses Managed Identity for authentication and adheres 
+This module implements a secure, schema-compliant agent that processes Destiny 2 gear queries using Azure AI.
+All queries must conform to the embedded schema. The agent uses Managed Identity for authentication and adheres
 to Azure best practices for reliability, security, and performance.
 """
 
@@ -14,7 +14,7 @@ import re
 import threading
 import time
 import urllib.parse
-from typing import Any, Dict
+from typing import Any, Dict, cast
 
 import pyodbc
 
@@ -60,6 +60,16 @@ class VaultSentinelDBAgent:
     """
 
     _instance = None
+    _DB_SESSION_ERROR_TEMPLATE = "Failed to get database session: %s"
+    _COLD_START_INDICATORS = (
+        "login timeout",
+        "connection timeout",
+        "hyt00",
+        "server is not ready",
+        "database is starting",
+        "not currently available",
+        "40613",
+    )
 
     @classmethod
     def instance(cls) -> "VaultSentinelDBAgent":
@@ -116,9 +126,10 @@ class VaultSentinelDBAgent:
 
         # SQLAlchemy engine and sessionmaker for ORM persistence
         self.engine = None
-        self.Session = None
+        self.session_factory = None
         self._connection_warmed = False
         self._initialize_database_connection()
+
 
     def _initialize_database_connection(self):
         """
@@ -194,42 +205,56 @@ class VaultSentinelDBAgent:
                     "connect_args": connect_kwargs,
                 }
                 self.engine = create_engine(sqlalchemy_url, **engine_config)
-            self.Session = orm.sessionmaker(bind=self.engine)
+            self.session_factory = orm.sessionmaker(bind=self.engine)
             logging.info("SQLAlchemy engine/session initialized for Azure SQL DB.")
             # Attempt connection warmup in background
             self._warmup_connection()
         except (SQLAlchemyError, pyodbc.Error) as e:
             logging.error("Failed to initialize SQLAlchemy engine: %s", e)
             self.engine = None
-            self.Session = None
+            self.session_factory = None
+
+    @staticmethod
+    def _close_session_quietly(session) -> None:
+        """Close a SQLAlchemy session if one was created."""
+        if session is not None:
+            session.close()
+
+    @classmethod
+    def _is_cold_start_error(cls, error: Exception) -> bool:
+        """Return True when a database exception matches known Azure SQL cold-start patterns."""
+        error_msg = str(error).lower()
+        return any(indicator in error_msg for indicator in cls._COLD_START_INDICATORS)
+
+    def _open_validated_session(self):
+        """Create a session and verify the connection with a lightweight query."""
+        if not self.session_factory:
+            raise RuntimeError("Database session not available")
+        session = self.session_factory()
+        session.execute(text("SELECT 1")).scalar()
+        return session
 
     def _warmup_connection(self):
-        """
-        Warms up the database connection to mitigate cold start issues.
-        """
-        if not self.Session:
+        """Warm up the database connection to mitigate Azure SQL cold starts."""
+        if not self.session_factory:
             return
-            
+
         max_warmup_attempts = 3
         warmup_delay = 2
-        
+
         for attempt in range(max_warmup_attempts):
+            session = None
             try:
-                session = self.Session()
-                try:
-                    # Simple warmup query with extended timeout
-                    warm_val = session.execute(text("SELECT 1 as warmup")).scalar()
-                    if warm_val == 1:
-                        self._connection_warmed = True
-                        logging.info("Database connection warmed up successfully.")
-                        return
-                finally:
-                    session.close()
-                    
+                session = self._open_validated_session()
+                self._connection_warmed = True
+                logging.info("Database connection warmed up successfully.")
+                return
             except (OperationalError, SaTimeoutError) as e:
                 logging.warning(
-                    "Database warmup attempt %d/%d failed (expected for cold start): %s", 
-                    attempt + 1, max_warmup_attempts, str(e)
+                    "Database warmup attempt %d/%d failed (expected for cold start): %s",
+                    attempt + 1,
+                    max_warmup_attempts,
+                    str(e),
                 )
                 if attempt < max_warmup_attempts - 1:
                     time.sleep(warmup_delay)
@@ -237,12 +262,14 @@ class VaultSentinelDBAgent:
             except (SQLAlchemyError, pyodbc.Error) as e:
                 logging.error("Unexpected database error during warmup: %s", e)
                 break
-        
+            finally:
+                self._close_session_quietly(session)
+
         logging.warning("Database warmup incomplete - connection may experience cold start delays.")
 
     def _get_session_with_cold_start_handling(self):
         """
-        Retrieves a database session with Azure SQL cold start mitigation.
+        Retrieve a database session with Azure SQL cold start mitigation.
 
         Returns:
             sqlalchemy.orm.Session: A SQLAlchemy session object.
@@ -250,54 +277,31 @@ class VaultSentinelDBAgent:
         Raises:
             RuntimeError: If the session cannot be created after multiple attempts.
         """
-        if not self.Session:
+        if not self.session_factory:
             raise RuntimeError("Database session not available")
-        
+
         max_attempts = 5 if not self._connection_warmed else 3
         base_delay = 2
-        
-        session = None
+
         for attempt in range(max_attempts):
             try:
-                session = self.Session()
-                
-                # Test the session with a lightweight query
-                session.execute(text("SELECT 1")).scalar()
-                return session
-                
+                return self._open_validated_session()
             except (OperationalError, SaTimeoutError) as e:
-                if session:
-                    session.close()
-                
-                # Check if this looks like a cold start issue
-                error_msg = str(e).lower()
-                cold_start_indicators = [
-                    'login timeout',
-                    'connection timeout',
-                    'hyt00',
-                    'server is not ready',
-                    'database is starting',
-                    'not currently available',
-                    '40613',
-                ]
-                is_cold_start = any(indicator in error_msg for indicator in cold_start_indicators)
-                
-                if is_cold_start and attempt < max_attempts - 1:
+                if self._is_cold_start_error(e) and attempt < max_attempts - 1:
                     delay = base_delay * (2 ** attempt)
                     logging.warning(
-                        "Cold start detected on attempt %d/%d, retrying in %d seconds: %s", 
-                        attempt + 1, max_attempts, delay, str(e)
+                        "Cold start detected on attempt %d/%d, retrying in %d seconds: %s",
+                        attempt + 1,
+                        max_attempts,
+                        delay,
+                        str(e),
                     )
                     time.sleep(delay)
                     continue
-                else:
-                    raise RuntimeError(f"Database session failed after {attempt + 1} attempts: {e}") from e
-                    
+                raise RuntimeError(f"Database session failed after {attempt + 1} attempts: {e}") from e
             except (SQLAlchemyError, pyodbc.Error) as e:
-                if session:
-                    session.close()
                 raise RuntimeError(f"Unexpected database error: {e}") from e
-        
+
         raise RuntimeError(f"Failed to create database session after {max_attempts} attempts")
 
     def validate_query(self, query: Dict[str, Any]) -> bool:
@@ -349,13 +353,15 @@ class VaultSentinelDBAgent:
             raise ValueError("Query does not conform to schema.")
         logging.info("Processing query: %s", query["intent"])
 
-        if not self.Session:
+        if not self.session_factory:
             logging.error("SQLAlchemy sessionmaker not initialized.")
             return {"status": "error", "error": "Sessionmaker not initialized"}
 
         if self.chat_client is None:
             logging.error("Azure OpenAI client is not configured. Set AZURE_OPENAI_* settings.")
             return {"status": "error", "error": "Azure OpenAI not configured."}
+
+        deployment_name = OPENAI_DEPLOYMENT or ""
 
         # Get instructions for the AI
         with open("db-agent-instructions.md", "r", encoding="utf-8") as f:
@@ -369,16 +375,18 @@ class VaultSentinelDBAgent:
             "role": "user",
             "content": json.dumps(query, indent=2)
         }
+        messages = cast(Any, [system_message, user_message])
 
         try:
             response = self.chat_client.chat.completions.create(
-                model=OPENAI_DEPLOYMENT,
-                messages=[system_message, user_message],
+                model=deployment_name,
+                messages=messages,
                 temperature=0.0,
                 frequency_penalty=0.0,
                 presence_penalty=-2.0
             )
-            sql_query = response.choices[0].message.content.strip() if response.choices else ""
+            response_content = response.choices[0].message.content if response.choices else ""
+            sql_query = response_content.strip() if isinstance(response_content, str) else ""
             logging.info("AI-generated SQL: %s", sql_query)
             valid, reason = self._validate_sql(sql_query)
             if not valid:
@@ -394,7 +402,7 @@ class VaultSentinelDBAgent:
                 return {"status": "success", "data": data, "sql": sql_query}
             finally:
                 session.close()
-                
+
         except BadRequestError as e:
             logging.error("Azure OpenAI bad request: %s", e)
             return {"status": "error", "error": "Azure OpenAI bad request. Check prompt/schema and inputs."}
@@ -423,41 +431,54 @@ class VaultSentinelDBAgent:
         'merge', 'grant', 'revoke', 'truncate', 'sp_', 'xp_'
     }
 
+    @staticmethod
+    def _normalize_table_name(name: str) -> str:
+        """Normalize SQL table identifiers like `dbo.[Items]` to `items`."""
+        normalized = name.strip().strip("[]")
+        if "." in normalized:
+            normalized = normalized.split(".")[-1]
+        return normalized.lower()
+
+    def _find_forbidden_keyword(self, query_lower: str) -> str | None:
+        """Return the first forbidden SQL keyword found in the query, if any."""
+        for keyword in self._FORBIDDEN_KEYWORDS:
+            if re.search(rf"\b{re.escape(keyword)}\b", query_lower):
+                return keyword
+        return None
+
+    def _iter_referenced_tables(self, query_lower: str) -> list[str]:
+        """Extract normalized table names referenced after `FROM` and `JOIN`."""
+        matches = re.findall(r"\bfrom\s+([\w\[\]\.]+)|\bjoin\s+([\w\[\]\.]+)", query_lower)
+        return [
+            self._normalize_table_name(token[0] or token[1])
+            for token in matches
+            if token[0] or token[1]
+        ]
+
     def _validate_sql(self, sql_query: str) -> tuple[bool, str]:
-        q = (sql_query or '').strip()
-        if not q:
-            return False, 'empty query'
-        ql = q.lower()
-        if not ql.startswith('select'):
-            return False, 'must be a SELECT query'
-        if len(q) > 8000:
-            return False, 'query too long'
-        # disallow multi-statements and comments
-        if ';' in ql:
-            return False, 'multiple statements not allowed'
-        if '--' in ql or '/*' in ql or '*/' in ql:
-            return False, 'comments not allowed'
-        # forbid dangerous keywords
-        for kw in self._FORBIDDEN_KEYWORDS:
-            if re.search(rf"\b{re.escape(kw)}\b", ql):
-                return False, f'forbidden keyword: {kw}'
-        # Extract table identifiers after FROM and JOIN and validate
-        def base_table(name: str) -> str:
-            # strip schema and brackets: dbo.[Items] -> items
-            n = name.strip()
-            n = n.strip('[]')
-            if '.' in n:
-                n = n.split('.')[-1]
-            return n.lower()
-        for token in re.findall(r"\bfrom\s+([\w\[\]\.]+)|\bjoin\s+([\w\[\]\.]+)", ql):
-            cand = token[0] or token[1]
-            if not cand:
-                continue
-            tbl = base_table(cand)
-            # allow aliases like items i => we already captured just the first name
-            if tbl not in self._ALLOWED_TABLES:
-                return False, f'unknown or disallowed table: {tbl}'
-        return True, 'ok'
+        """Validate that AI-generated SQL is a single safe `SELECT` over allowed tables."""
+        query_text = (sql_query or "").strip()
+        if not query_text:
+            return False, "empty query"
+
+        query_lower = query_text.lower()
+        if not query_lower.startswith("select"):
+            return False, "must be a SELECT query"
+        if len(query_text) > 8000:
+            return False, "query too long"
+        if ";" in query_lower:
+            return False, "multiple statements not allowed"
+        if "--" in query_lower or "/*" in query_lower or "*/" in query_lower:
+            return False, "comments not allowed"
+
+        forbidden_keyword = self._find_forbidden_keyword(query_lower)
+        if forbidden_keyword:
+            return False, f"forbidden keyword: {forbidden_keyword}"
+
+        for table_name in self._iter_referenced_tables(query_lower):
+            if table_name not in self._ALLOWED_TABLES:
+                return False, f"unknown or disallowed table: {table_name}"
+        return True, "ok"
 
     @staticmethod
     def _safe_int(value: Any) -> int | None:
@@ -471,6 +492,13 @@ class VaultSentinelDBAgent:
                 return int(str(value))
             except (TypeError, ValueError):
                 return None
+
+    def _require_int(self, value: Any, label: str) -> int:
+        """Convert an identifier to `int` and fail fast if it is unavailable."""
+        normalized = self._safe_int(value)
+        if normalized is None:
+            raise RuntimeError(f"Expected {label} to be populated")
+        return normalized
 
     def _get_or_create_user(self, session, membership_id: str, membership_type: str) -> User:
         user_obj = session.query(User).filter_by(membership_id=membership_id).first()
@@ -519,7 +547,6 @@ class VaultSentinelDBAgent:
         if not item_obj:
             item_obj = Item()
 
-        # Compute new content hash from item model snapshot
         new_hash = None
         try:
             content_payload = {
@@ -537,155 +564,229 @@ class VaultSentinelDBAgent:
         except (TypeError, ValueError):  # pragma: no cover - hashing best effort
             new_hash = None
 
-        item_obj.character_id = character_id
-        item_obj.vault_id = vault_id
-        item_obj.item_hash = item_hash
-        item_obj.item_instance_id = instance_id
-        item_obj.name = item_model.itemName
-        item_obj.type = item_model.itemType
-        item_obj.tier = item_model.itemTier
-        item_obj.power_value = item_model.stats.get("Power")
-        item_obj.is_equipped = item_model.isEquipped
+        item_record = cast(Any, item_obj)
+        item_record.character_id = character_id
+        item_record.vault_id = vault_id
+        item_record.item_hash = item_hash
+        item_record.item_instance_id = instance_id
+        item_record.name = item_model.itemName
+        item_record.type = item_model.itemType
+        item_record.tier = item_model.itemTier
+        item_record.power_value = item_model.stats.get("Power")
+        item_record.is_equipped = item_model.isEquipped
 
-        old_hash = item_obj.content_hash
+        old_hash = cast(str | None, getattr(item_obj, "content_hash", None))
         if new_hash is not None:
-            item_obj.content_hash = new_hash
+            item_record.content_hash = new_hash
 
         session.add(item_obj)
         session.flush()
-        needs_refresh = (new_hash is None) or (old_hash != new_hash)
+        needs_refresh = new_hash is None or old_hash != new_hash
         if needs_refresh:
             self._sync_item_children(session, item_obj, item_model, instance_id)
         return item_obj
 
     def _delete_item(self, session, item_obj: Item) -> None:
-        item_id = item_obj.item_id
-        instance_id = item_obj.item_instance_id
+        item_id = self._require_int(getattr(item_obj, "item_id", None), "item.item_id")
+        instance_id = self._safe_int(getattr(item_obj, "item_instance_id", None))
         session.query(ItemStat).filter_by(item_id=item_id).delete(synchronize_session=False)
-        session.query(ItemSocket).filter_by(item_id=item_id).delete(synchronize_session=False)
         session.query(ItemPlug).filter_by(item_id=item_id).delete(synchronize_session=False)
+        session.query(ItemSocket).filter_by(item_id=item_id).delete(synchronize_session=False)
         if instance_id is not None:
             session.query(ItemEnergy).filter_by(instance_id=instance_id).delete(synchronize_session=False)
             session.query(ItemSocketChoice).filter_by(instance_id=instance_id).delete(synchronize_session=False)
             session.query(ItemSandboxPerk).filter_by(instance_id=instance_id).delete(synchronize_session=False)
         session.delete(item_obj)
 
-    def _sync_item_children(self, session, item_obj: Item, item_model, instance_id: int | None) -> None:
-        """Replace child records (stats, sockets, energy, etc.) for an item."""
-        session.query(ItemStat).filter(ItemStat.item_id == item_obj.item_id).delete(synchronize_session=False)
+    def _sync_item_stats(self, session, item_id: int, item_model) -> None:
+        """Replace the stat rows for an item."""
+        session.query(ItemStat).filter(ItemStat.item_id == item_id).delete(synchronize_session=False)
         if item_model.statDetails:
             for detail in item_model.statDetails:
                 stat_hash = self._safe_int(detail.hash)
                 if stat_hash is None:
                     continue
                 session.add(ItemStat(
-                    item_id=item_obj.item_id,
+                    item_id=item_id,
                     stat_hash=stat_hash,
                     stat_name=detail.name,
-                    stat_value=detail.value
+                    stat_value=detail.value,
                 ))
-        else:
-            for stat_name, stat_value in item_model.stats.items():
-                session.add(ItemStat(
-                    item_id=item_obj.item_id,
-                    stat_hash=0,
-                    stat_name=stat_name,
-                    stat_value=stat_value
-                ))
+            return
 
-        session.query(ItemPlug).filter(ItemPlug.item_id == item_obj.item_id).delete(synchronize_session=False)
-        session.query(ItemSocket).filter(ItemSocket.item_id == item_obj.item_id).delete(synchronize_session=False)
-        sockets = item_model.perks.get("sockets", []) or []
-        for socket in sockets:
+        for stat_name, stat_value in item_model.stats.items():
+            session.add(ItemStat(
+                item_id=item_id,
+                stat_hash=0,
+                stat_name=stat_name,
+                stat_value=stat_value,
+            ))
+
+    def _sync_item_sockets(self, session, item_id: int, item_model) -> None:
+        """Replace the socket and equipped plug rows for an item."""
+        session.query(ItemPlug).filter(ItemPlug.item_id == item_id).delete(synchronize_session=False)
+        session.query(ItemSocket).filter(ItemSocket.item_id == item_id).delete(synchronize_session=False)
+        for socket in item_model.perks.get("sockets", []) or []:
             socket_index = self._safe_int(socket.get("socketIndex"))
             if socket_index is None:
                 continue
-            socket_record = ItemSocket(
-                item_id=item_obj.item_id,
+            session.add(ItemSocket(
+                item_id=item_id,
                 socket_index=socket_index,
                 socket_type_hash=self._safe_int(socket.get("socketTypeHash")),
                 category_name=socket.get("categoryName"),
                 is_visible=bool(socket.get("isVisible", False)),
-                is_enabled=bool(socket.get("isEnabled", False))
-            )
-            session.add(socket_record)
+                is_enabled=bool(socket.get("isEnabled", False)),
+            ))
             equipped = socket.get("equipped") or {}
             plug_hash = self._safe_int(equipped.get("hash"))
             if plug_hash is not None:
                 session.add(ItemPlug(
-                    item_id=item_obj.item_id,
+                    item_id=item_id,
                     socket_index=socket_index,
                     plug_hash=plug_hash,
                     plug_name=equipped.get("name"),
                     plug_icon=equipped.get("icon"),
-                    is_equipped=True
+                    is_equipped=True,
                 ))
 
+    @staticmethod
+    def _select_preferred_perk(existing: dict | None, candidate: dict) -> dict:
+        """Prefer active perk records, then visible ones, when deduplicating sandbox perks."""
+        if existing is None:
+            return candidate
+        if existing["is_active"] and not candidate["is_active"]:
+            return existing
+        if existing["is_active"] == candidate["is_active"] and existing["is_visible"]:
+            return existing
+        return candidate
+
+    def _build_perk_records(self, item_model) -> dict[int, dict]:
+        """Deduplicate sandbox perk rows while preferring active and visible entries."""
+        perk_records: dict[int, dict] = {}
+        for perk in item_model.perks.get("sandboxPerks", []) or []:
+            perk_hash = self._safe_int(perk.get("hash"))
+            if perk_hash is None:
+                continue
+            candidate = {
+                "name": perk.get("name"),
+                "icon": perk.get("icon"),
+                "is_active": bool(perk.get("active", False)),
+                "is_visible": bool(perk.get("visible", False)),
+            }
+            perk_records[perk_hash] = self._select_preferred_perk(perk_records.get(perk_hash), candidate)
+        return perk_records
+
+    def _sync_item_energy(self, session, instance_id: int, item_model) -> None:
+        """Replace the per-instance energy row for an item."""
+        session.query(ItemEnergy).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+        energy_entries = item_model.perks.get("energy") or []
+        if not energy_entries:
+            return
+
+        energy = energy_entries[0]
+        session.add(ItemEnergy(
+            instance_id=instance_id,
+            energy_type_hash=self._safe_int(energy.get("type_hash")),
+            energy_type_name=energy.get("type_name"),
+            capacity=self._safe_int(energy.get("capacity")),
+            used=self._safe_int(energy.get("used")),
+            unused=self._safe_int(energy.get("unused")),
+        ))
+
+    def _sync_reusable_plug_choices(self, session, instance_id: int, item_model) -> None:
+        """Replace reusable plug choice rows for an item instance."""
+        session.query(ItemSocketChoice).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+        seen_choices: set[tuple[int, int]] = set()
+        for choice in item_model.perks.get("reusablePlugs", []) or []:
+            socket_index = self._safe_int(choice.get("socketIndex"))
+            if socket_index is None:
+                continue
+            for plug in choice.get("choices", []) or []:
+                plug_hash = self._safe_int(plug.get("hash"))
+                if plug_hash is None:
+                    continue
+                key = (socket_index, plug_hash)
+                if key in seen_choices:
+                    continue
+                seen_choices.add(key)
+                session.add(ItemSocketChoice(
+                    instance_id=instance_id,
+                    socket_index=socket_index,
+                    plug_hash=plug_hash,
+                    plug_name=plug.get("name"),
+                ))
+
+    def _sync_item_instance_children(self, session, instance_id: int, item_model) -> None:
+        """Replace instance-specific child rows such as energy, reusable plugs, and sandbox perks."""
+        self._sync_item_energy(session, instance_id, item_model)
+        self._sync_reusable_plug_choices(session, instance_id, item_model)
+        session.query(ItemSandboxPerk).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+        for perk_hash, data in self._build_perk_records(item_model).items():
+            session.add(ItemSandboxPerk(
+                instance_id=instance_id,
+                sandbox_perk_hash=perk_hash,
+                name=data["name"],
+                icon=data["icon"],
+                is_active=data["is_active"],
+                is_visible=data["is_visible"],
+            ))
+
+    def _sync_item_children(self, session, item_obj: Item, item_model, instance_id: int | None) -> None:
+        """Replace child records (stats, sockets, energy, etc.) for an item."""
+        item_id = self._require_int(getattr(item_obj, "item_id", None), "item.item_id")
+        self._sync_item_stats(session, item_id, item_model)
+        self._sync_item_sockets(session, item_id, item_model)
         if instance_id is not None:
-            session.query(ItemEnergy).filter_by(instance_id=instance_id).delete(synchronize_session=False)
-            energy_entries = item_model.perks.get("energy") or []
-            if energy_entries:
-                energy = energy_entries[0]
-                session.add(ItemEnergy(
-                    instance_id=instance_id,
-                    energy_type_hash=self._safe_int(energy.get("type_hash")),
-                    energy_type_name=energy.get("type_name"),
-                    capacity=self._safe_int(energy.get("capacity")),
-                    used=self._safe_int(energy.get("used")),
-                    unused=self._safe_int(energy.get("unused"))
-                ))
+            self._sync_item_instance_children(session, instance_id, item_model)
 
-            session.query(ItemSocketChoice).filter_by(instance_id=instance_id).delete(synchronize_session=False)
-            seen_choices: set[tuple[int, int]] = set()
-            for choice in item_model.perks.get("reusablePlugs", []) or []:
-                socket_index = self._safe_int(choice.get("socketIndex"))
-                if socket_index is None:
-                    continue
-                for plug in choice.get("choices", []) or []:
-                    plug_hash = self._safe_int(plug.get("hash"))
-                    if plug_hash is None:
-                        continue
-                    key = (socket_index, plug_hash)
-                    if key in seen_choices:
-                        continue
-                    seen_choices.add(key)
-                    session.add(ItemSocketChoice(
-                        instance_id=instance_id,
-                        socket_index=socket_index,
-                        plug_hash=plug_hash,
-                        plug_name=plug.get("name")
-                    ))
+    def _collect_persisted_item_ids(
+        self,
+        session,
+        items,
+        *,
+        character_id: int | None = None,
+        vault_id: int | None = None,
+    ) -> set[int]:
+        """Persist a sequence of items and return the set of resulting database item IDs."""
+        seen_item_ids: set[int] = set()
+        for item in items:
+            db_item = self._persist_item_record(session, item, character_id=character_id, vault_id=vault_id)
+            item_id = self._safe_int(getattr(db_item, "item_id", None))
+            if item_id is not None:
+                seen_item_ids.add(item_id)
+        return seen_item_ids
 
-            session.query(ItemSandboxPerk).filter_by(instance_id=instance_id).delete(synchronize_session=False)
-            perk_records: dict[int, dict] = {}
-            for perk in item_model.perks.get("sandboxPerks", []) or []:
-                perk_hash = self._safe_int(perk.get("hash"))
-                if perk_hash is None:
-                    continue
-                current = perk_records.get(perk_hash)
-                candidate = {
-                    "name": perk.get("name"),
-                    "icon": perk.get("icon"),
-                    "is_active": bool(perk.get("active", False)),
-                    "is_visible": bool(perk.get("visible", False)),
-                }
-                if current:
-                    # Prefer records that are active; if active state matches, keep visible ones
-                    if current["is_active"] and not candidate["is_active"]:
-                        continue
-                    if current["is_active"] == candidate["is_active"] and current["is_visible"]:
-                        continue
-                perk_records[perk_hash] = candidate
+    def _delete_missing_items(self, session, existing_items, seen_item_ids: set[int]) -> None:
+        """Delete persisted items that were not present in the latest source payload."""
+        for db_item in existing_items:
+            item_id = self._safe_int(getattr(db_item, "item_id", None))
+            if item_id is None or item_id not in seen_item_ids:
+                self._delete_item(session, db_item)
 
-            for perk_hash, data in perk_records.items():
-                session.add(ItemSandboxPerk(
-                    instance_id=instance_id,
-                    sandbox_perk_hash=perk_hash,
-                    name=data["name"],
-                    icon=data["icon"],
-                    is_active=data["is_active"],
-                    is_visible=data["is_visible"],
-                ))
+    def _upsert_character(self, session, user_id: int, char_model) -> Character | None:
+        """Create or update a character ORM record from a decoded character model."""
+        character_id = self._safe_int(char_model.charId)
+        if character_id is None:
+            logging.warning("Skipping character with non-numeric ID: %s", char_model.charId)
+            return None
+
+        char_obj = session.query(Character).filter_by(character_id=character_id).first()
+        if not char_obj:
+            char_obj = Character(character_id=character_id, user_id=user_id)
+
+        race_hash = race_name_to_hash().get(char_model.race) if char_model.race else None
+        if race_hash is None:
+            race_hash = self._safe_int(char_model.race)
+
+        char_record = cast(Any, char_obj)
+        char_record.user_id = user_id
+        char_record.class_type = char_model.classType
+        char_record.light = self._safe_int(char_model.light)
+        char_record.race_hash = race_hash
+        session.add(char_obj)
+        session.flush()
+        return char_obj
 
     def persist_vault(self, vault_model, membership_id, membership_type):
         """
@@ -700,22 +801,17 @@ class VaultSentinelDBAgent:
         try:
             session = self._get_session_with_cold_start_handling()
         except RuntimeError as e:
-            logging.error("Failed to get database session: %s", e)
+            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e)
             return {"status": "error", "error": str(e)}
-            
+
         try:
             user_obj = self._get_or_create_user(session, membership_id, membership_type)
-            vault_obj = self._get_or_create_vault(session, user_obj.user_id)
-            seen_item_ids: set[int] = set()
-            for item in vault_model.items:
-                db_item = self._persist_item_record(session, item, vault_id=vault_obj.vault_id)
-                if db_item.item_id is not None:
-                    seen_item_ids.add(db_item.item_id)
-
-            existing_items = session.query(Item).filter_by(vault_id=vault_obj.vault_id).all()
-            for db_item in existing_items:
-                if db_item.item_id not in seen_item_ids:
-                    self._delete_item(session, db_item)
+            user_id = self._require_int(getattr(user_obj, "user_id", None), "user.user_id")
+            vault_obj = self._get_or_create_vault(session, user_id)
+            vault_id = self._require_int(getattr(vault_obj, "vault_id", None), "vault.vault_id")
+            seen_item_ids = self._collect_persisted_item_ids(session, vault_model.items, vault_id=vault_id)
+            existing_items = session.query(Item).filter_by(vault_id=vault_id).all()
+            self._delete_missing_items(session, existing_items, seen_item_ids)
             session.commit()
             return {"status": "success"}
         except (SQLAlchemyError, pyodbc.Error) as e:
@@ -738,41 +834,24 @@ class VaultSentinelDBAgent:
         try:
             session = self._get_session_with_cold_start_handling()
         except RuntimeError as e:
-            logging.error("Failed to get database session: %s", e)
+            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e)
             return {"status": "error", "error": str(e)}
-            
+
         try:
             user_obj = self._get_or_create_user(session, membership_id, membership_type)
+            user_id = self._require_int(getattr(user_obj, "user_id", None), "user.user_id")
             for char_model in character_models:
-                character_id = self._safe_int(char_model.charId)
-                if character_id is None:
-                    logging.warning("Skipping character with non-numeric ID: %s", char_model.charId)
+                char_obj = self._upsert_character(session, user_id, char_model)
+                if char_obj is None:
                     continue
-                char_obj = session.query(Character).filter_by(character_id=character_id).first()
-                if not char_obj:
-                    char_obj = Character(character_id=character_id, user_id=user_obj.user_id)
-                char_obj.user_id = user_obj.user_id
-                char_obj.class_type = char_model.classType
-                char_obj.light = self._safe_int(char_model.light)
-                race_hash = None
-                if char_model.race:
-                    race_hash = race_name_to_hash().get(char_model.race)
-                if race_hash is None:
-                    race_hash = self._safe_int(char_model.race)
-                char_obj.race_hash = race_hash
-                session.add(char_obj)
-                session.flush()
-
-                seen_item_ids: set[int] = set()
-                for item in char_model.items:
-                    db_item = self._persist_item_record(session, item, character_id=char_obj.character_id)
-                    if db_item.item_id is not None:
-                        seen_item_ids.add(db_item.item_id)
-
-                existing_items = session.query(Item).filter_by(character_id=char_obj.character_id).all()
-                for db_item in existing_items:
-                    if db_item.item_id not in seen_item_ids:
-                        self._delete_item(session, db_item)
+                character_id = self._require_int(getattr(char_obj, "character_id", None), "character.character_id")
+                seen_item_ids = self._collect_persisted_item_ids(
+                    session,
+                    char_model.items,
+                    character_id=character_id,
+                )
+                existing_items = session.query(Item).filter_by(character_id=character_id).all()
+                self._delete_missing_items(session, existing_items, seen_item_ids)
             session.commit()
             return {"status": "success"}
         except (SQLAlchemyError, pyodbc.Error) as e:
@@ -795,9 +874,9 @@ class VaultSentinelDBAgent:
         try:
             session = self._get_session_with_cold_start_handling()
         except RuntimeError as e:
-            logging.error("Failed to get database session: %s", e)
+            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e)
             return {"status": "error", "error": str(e)}
-            
+
         try:
             self._persist_item_record(session, item_model, character_id=character_id, vault_id=vault_id)
             session.commit()

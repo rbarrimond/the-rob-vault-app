@@ -13,7 +13,7 @@ This module provides:
 import time
 import logging
 import hashlib
-from datetime import datetime
+from datetime import UTC, datetime
 import ctypes
 from typing import Optional
 
@@ -240,8 +240,7 @@ def save_dim_backup_blob(connection_string: str, table_name: str, membership_id:
     except ResourceExistsError:
         logging.info("Blob container 'dim-backups' already exists.")
     if not timestamp:
-        # Use datetime imported from 'from datetime import datetime'
-        timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     blob_name = f"dim-backup-{membership_id}-{timestamp}.json"
     container.upload_blob(blob_name, dim_json_str, overwrite=True)
     logging.info("DIM backup saved to blob: %s", blob_name)

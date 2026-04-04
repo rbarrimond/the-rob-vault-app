@@ -14,7 +14,7 @@ All API interactions, manifest lookups, and backup operations are managed throug
 
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 import requests
 from azure.core.exceptions import AzureError
@@ -34,6 +34,9 @@ from models import CharacterModel, ItemModel, VaultModel
 from vault_sentinel_db_agent import VaultSentinelDBAgent
 
 
+NO_DESTINY_MEMBERSHIPS_FOUND = "No Destiny memberships found for user."
+
+
 class VaultAssistant:
     """
     Business logic for Destiny 2 Vault Assistant operations.
@@ -47,8 +50,8 @@ class VaultAssistant:
 
     def __init__(
         self,
-        api_key: str = API_KEY,
-        storage_conn_str: str = STORAGE_CONNECTION_STRING,
+        api_key: str | None = API_KEY,
+        storage_conn_str: str | None = STORAGE_CONNECTION_STRING,
         table_name: str = TABLE_NAME,
         blob_container: str = BLOB_CONTAINER,
         api_base: str = BUNGIE_API_BASE,
@@ -65,8 +68,8 @@ class VaultAssistant:
             api_base (str): Bungie API base URL.
             timeout (int): HTTP request timeout in seconds.
         """
-        self.api_key = api_key
-        self.storage_conn_str = storage_conn_str
+        self.api_key = api_key or ""
+        self.storage_conn_str = storage_conn_str or ""
         self.table_name = table_name
         self.blob_container = blob_container
         self.api_base = api_base
@@ -74,6 +77,130 @@ class VaultAssistant:
         self.manifest_cache = ManifestCache.instance()
         self.session_manager = BungieSessionManager.instance()
         # DB agent is provided via factory (on-demand); do not construct here to avoid cold-start hangs.
+
+    def _build_headers(self, access_token: str) -> dict[str, str]:
+        """Build the standard Bungie API headers for the current request."""
+        return {
+            "Authorization": f"Bearer {access_token}",
+            "X-API-Key": self.api_key,
+        }
+
+    @staticmethod
+    def _page_items(items: list[dict], limit: int | None, offset: int) -> list[dict]:
+        """Return a paginated slice of an item list."""
+        return items[offset:offset + limit] if limit is not None else items[offset:]
+
+    @staticmethod
+    def _should_sync_decoded_payload(force_refresh: bool, limit: int | None, offset: int) -> bool:
+        """Return True when the full decoded dataset should also be persisted."""
+        return force_refresh or (limit is None and offset == 0)
+
+    @staticmethod
+    def _serialize_item_models(item_models, include_perks: bool) -> list[dict]:
+        """Serialize decoded item models while optionally omitting perk details."""
+        serialized_items: list[dict] = []
+        for item in item_models:
+            item_dict = item.model_dump()
+            if not include_perks:
+                item_dict.pop("perks", None)
+            serialized_items.append(item_dict)
+        return serialized_items
+
+    def _fetch_item_components_map(
+        self,
+        membership_id: str,
+        membership_type: str,
+        headers: dict[str, str],
+        *,
+        context: str,
+    ) -> dict[str, dict]:
+        """Fetch and merge Bungie item components, returning an empty mapping on failure."""
+        components_url = (
+            f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components="
+            "300,302,304,305,310"
+        )
+        try:
+            components_resp = retry_request(
+                requests.get,
+                components_url,
+                headers=headers,
+                timeout=self.timeout,
+            )
+        except (RequestException, RuntimeError, ValueError) as exc:
+            logging.warning("Error fetching item components for %s: %s", context, exc)
+            return {}
+
+        if not components_resp.ok:
+            logging.warning(
+                "Failed to fetch item components for %s. Status: %d",
+                context,
+                components_resp.status_code,
+            )
+            return {}
+
+        components_payload = components_resp.json().get("Response", {}).get("itemComponents", {})
+        return self._merge_item_components(components_payload)
+
+    def _build_character_profile(
+        self,
+        char_id: str,
+        char_info: dict,
+        inventory_data: dict,
+        artifact_hash: int | None,
+        artifact_power_bonus: int | None,
+    ) -> dict:
+        """Build a manifest-enriched character payload from Bungie character data."""
+        race_hash = char_info.get("raceHash")
+        class_hash = char_info.get("classHash")
+        gender_hash = char_info.get("genderHash")
+        race_def = self.manifest_cache.resolve_exact(race_hash, "DestinyRaceDefinition") if race_hash else None
+        class_def = self.manifest_cache.resolve_exact(class_hash, "DestinyClassDefinition") if class_hash else None
+        gender_def = self.manifest_cache.resolve_exact(gender_hash, "DestinyGenderDefinition") if gender_hash else None
+
+        enriched_character = {
+            "characterId": char_id,
+            "class": class_def["displayProperties"]["name"] if class_def else None,
+            "race": race_def["displayProperties"]["name"] if race_def else None,
+            "gender": gender_def["displayProperties"]["name"] if gender_def else None,
+            "light": char_info.get("light"),
+            "emblem": char_info.get("emblemPath"),
+            "emblemBackground": char_info.get("emblemBackgroundPath"),
+            "level": char_info.get("baseCharacterLevel"),
+            "lastPlayed": char_info.get("dateLastPlayed"),
+            "items": inventory_data.get(char_id, {}).get("items", []),
+        }
+        if artifact_hash is not None:
+            enriched_character["artifact"] = {
+                "itemHash": artifact_hash,
+                "powerBonus": artifact_power_bonus,
+            }
+        return enriched_character
+
+    def _decode_character_payload(
+        self,
+        char_data: dict,
+        components_map: dict[str, dict],
+        include_perks: bool,
+        limit: int | None,
+        offset: int,
+    ) -> tuple[CharacterModel, dict, dict]:
+        """Decode one stored character payload into full and paged response forms."""
+        char_items = char_data.get("items", [])
+        char_data_no_items = {k: v for k, v in char_data.items() if k != "items"}
+        artifact_raw = char_data.get("artifact") if isinstance(char_data.get("artifact"), dict) else None
+        char_model = CharacterModel.from_components(
+            char_data_no_items,
+            char_items,
+            components_map,
+            artifact_raw=artifact_raw,
+        )
+
+        full_char_dict = char_model.model_dump()
+        full_items = self._serialize_item_models(char_model.items, include_perks)
+        full_char_dict["items"] = full_items
+        paged_char_dict = dict(full_char_dict)
+        paged_char_dict["items"] = self._page_items(full_items, limit, offset)
+        return char_model, full_char_dict, paged_char_dict
 
     @staticmethod
     def _merge_item_components(component_payload: dict | None) -> dict[str, dict]:
@@ -153,42 +280,40 @@ class VaultAssistant:
         membership_id = session["membership_id"]
         membership_type = session["membership_type"]
         if not all([membership_id, membership_type]):
-            logging.error("No Destiny memberships found for user.")
+            logging.error(NO_DESTINY_MEMBERSHIPS_FOUND)
             return None, 404
-        # Ensure manifest is loaded using ManifestCache
+
         manifest_ready = self.manifest_cache.ensure_manifest()
-        # Get character list
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "X-API-Key": self.api_key
-        }
+        headers = self._build_headers(access_token)
         characters_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=200"
         char_resp = retry_request(requests.get, characters_url, headers=headers, timeout=self.timeout)
         if not char_resp.ok:
             logging.error("Failed to get characters: status %d", char_resp.status_code)
             return None, char_resp.status_code
+
         characters_data = char_resp.json()["Response"]["characters"]["data"]
         character_summary = {}
         for char_id, char in characters_data.items():
             class_type = char["classType"]
             race_hash = char["raceHash"]
             class_name = CLASS_TYPE_MAP.get(class_type, str(class_type))
-            race_def = self.manifest_cache.resolve_exact(race_hash, "DestinyRaceDefinition" )
+            race_def = self.manifest_cache.resolve_exact(race_hash, "DestinyRaceDefinition")
             race_name = race_def.get("displayProperties", {}).get("name") if race_def else str(race_hash)
             character_summary[char_id] = {
                 "classType": class_type,
                 "className": class_name,
                 "light": char["light"],
                 "raceHash": race_hash,
-                "raceName": race_name
+                "raceName": race_name,
             }
+
         logging.info("User initialized successfully: %s", membership_id)
         return {
             "message": "Assistant initialized.",
             "membershipId": membership_id,
             "membershipType": membership_type,
             "characters": character_summary,
-            "manifestReady": manifest_ready
+            "manifestReady": manifest_ready,
         }, 200
 
     def get_bungie_profile_last_modified(self, membership_id: str, membership_type: str, headers: dict) -> tuple[datetime | None, int]:
@@ -235,8 +360,8 @@ class VaultAssistant:
             logging.error("Failed to obtain DB agent instance (runtime): %s", e)
             return {"status": "error", "error": "DB agent unavailable. Check configuration and logs."}
         # Allow graceful error if underlying services not configured
-        if not getattr(agent, "Session", None):
-            logging.error("DB agent Session not initialized.")
+        if not getattr(agent, "session_factory", None):
+            logging.error("DB agent session factory not initialized.")
             return {"status": "error", "error": "Database not configured."}
         return agent.process_query(query)
 
@@ -254,42 +379,35 @@ class VaultAssistant:
         membership_id = session["membership_id"]
         membership_type = session["membership_type"]
         if not all([membership_id, membership_type]):
-            logging.error("No Destiny memberships found for user.")
+            logging.error(NO_DESTINY_MEMBERSHIPS_FOUND)
             return None, 404
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "X-API-Key": self.api_key
-        }
-        # Get Bungie profile lastModified using helper
+        headers = self._build_headers(access_token)
         bungie_last_modified_dt, status = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)
         if status != 200:
             return None, status
 
-        # Get blob last modified using helpers
         blob_name = f"{membership_id}.json"
-        blob_exists_flag = blob_exists(self.storage_conn_str, self.blob_container, blob_name)
         blob_last_modified_dt = get_blob_last_modified(self.storage_conn_str, self.blob_container, blob_name)
-
-        # If blob exists and is newer than Bungie profile, use cached inventory
-        if blob_exists_flag and bungie_last_modified_dt and blob_last_modified_dt and blob_last_modified_dt >= bungie_last_modified_dt:
-            logging.info(
-                "Using cached vault inventory from blob for user: %s", membership_id)
+        if (
+            blob_exists(self.storage_conn_str, self.blob_container, blob_name)
+            and bungie_last_modified_dt
+            and blob_last_modified_dt
+            and blob_last_modified_dt >= bungie_last_modified_dt
+        ):
+            logging.info("Using cached vault inventory from blob for user: %s", membership_id)
             blob_data = load_blob(self.storage_conn_str, self.blob_container, blob_name)
-            inventory = json.loads(blob_data)
-            return inventory, 200
+            if blob_data is not None:
+                return json.loads(blob_data), 200
 
-        # Otherwise, fetch fresh inventory and update blob
         inventory_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=102"
-        inv_resp = retry_request(
-            requests.get, inventory_url, headers=headers, timeout=self.timeout)
+        inv_resp = retry_request(requests.get, inventory_url, headers=headers, timeout=self.timeout)
         if not inv_resp.ok:
-            logging.error(
-                "Failed to get vault inventory: status %d", inv_resp.status_code)
+            logging.error("Failed to get vault inventory: status %d", inv_resp.status_code)
             return None, inv_resp.status_code
+
         inventory = inv_resp.json()["Response"]["profileInventory"]["data"]["items"]
-        save_blob(self.storage_conn_str, self.blob_container,
-                  blob_name, json.dumps(inventory))
+        save_blob(self.storage_conn_str, self.blob_container, blob_name, json.dumps(inventory))
         logging.info("Vault inventory fetched and saved for user: %s", membership_id)
         return inventory, 200
 
@@ -302,85 +420,59 @@ class VaultAssistant:
         """
         session = self.get_session()
         access_token = session["access_token"]
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "X-API-Key": self.api_key
-        }
         membership_id = session["membership_id"]
         membership_type = session["membership_type"]
         if not all([membership_id, membership_type]):
-            logging.error("No Destiny memberships found for user.")
+            logging.error(NO_DESTINY_MEMBERSHIPS_FOUND)
             return None, 404
 
-        # Get Bungie profile lastModified using helper
+        headers = self._build_headers(access_token)
         bungie_last_modified_dt, status = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)
         if status != 200:
             return None, status
 
-        # Get blob last modified using helpers
         blob_name = f"{membership_id}-characters.json"
-        blob_exists_flag = blob_exists(self.storage_conn_str, self.blob_container, blob_name)
         blob_last_modified_dt = get_blob_last_modified(self.storage_conn_str, self.blob_container, blob_name)
-
-        # If blob exists and is newer than Bungie profile, use cached inventory
-        if blob_exists_flag and bungie_last_modified_dt and blob_last_modified_dt and blob_last_modified_dt >= bungie_last_modified_dt:
+        if (
+            blob_exists(self.storage_conn_str, self.blob_container, blob_name)
+            and bungie_last_modified_dt
+            and blob_last_modified_dt
+            and blob_last_modified_dt >= bungie_last_modified_dt
+        ):
             logging.info("Using cached character inventories from blob for user: %s", membership_id)
             blob_data = load_blob(self.storage_conn_str, self.blob_container, blob_name)
-            inventory_data = json.loads(blob_data)
-            return inventory_data, 200
+            if blob_data is not None:
+                return json.loads(blob_data), 200
 
-        # Otherwise, fetch fresh character summary and inventory, then enrich
         char_url = f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components=200,201,900"
-        char_resp = retry_request(
-            requests.get, char_url, headers=headers, timeout=self.timeout)
+        char_resp = retry_request(requests.get, char_url, headers=headers, timeout=self.timeout)
         if not char_resp.ok:
             logging.error("Failed to get character data: status %d", char_resp.status_code)
             return None, char_resp.status_code
+
         resp_json = char_resp.json()["Response"]
         char_data = resp_json["characters"]["data"]
         inventory_data = resp_json["characterInventories"]["data"]
-
-        # Extract seasonal artifact info from profileProgression
         profile_prog = resp_json.get("profileProgression", {}).get("data", {}) or {}
         seasonal_artifact = profile_prog.get("seasonalArtifact", {}) or {}
         artifact_hash = seasonal_artifact.get("artifactItemHash")
         artifact_power_bonus = seasonal_artifact.get("powerBonus")
 
-        # Enrich each character with manifest lookups
-        enriched = {}
-        for char_id, char_info in char_data.items():
-            race_hash = char_info.get("raceHash")
-            class_hash = char_info.get("classHash")
-            gender_hash = char_info.get("genderHash")
-            # Manifest lookups
-            race_def = self.manifest_cache.resolve_exact(race_hash, "DestinyRaceDefinition") if race_hash else None
-            class_def = self.manifest_cache.resolve_exact(class_hash, "DestinyClassDefinition") if class_hash else None
-            gender_def = self.manifest_cache.resolve_exact(gender_hash, "DestinyGenderDefinition") if gender_hash else None
-            enriched[char_id] = {
-                "characterId": char_id,
-                "class": class_def["displayProperties"]["name"] if class_def else None,
-                "race": race_def["displayProperties"]["name"] if race_def else None,
-                "gender": gender_def["displayProperties"]["name"] if gender_def else None,
-                "light": char_info.get("light"),
-                "emblem": char_info.get("emblemPath"),
-                "emblemBackground": char_info.get("emblemBackgroundPath"),
-                "level": char_info.get("baseCharacterLevel"),
-                "lastPlayed": char_info.get("dateLastPlayed"),
-                "items": inventory_data.get(char_id, {}).get("items", []),
-            }
-            # Attach seasonal artifact (profile-wide) to each character record for convenience
-            if artifact_hash is not None:
-                enriched[char_id]["artifact"] = {
-                    "itemHash": artifact_hash,
-                    "powerBonus": artifact_power_bonus,
-                }
-
-        # Save enriched character data to blob
+        enriched = {
+            char_id: self._build_character_profile(
+                char_id,
+                char_info,
+                inventory_data,
+                artifact_hash,
+                artifact_power_bonus,
+            )
+            for char_id, char_info in char_data.items()
+        }
         save_blob(self.storage_conn_str, self.blob_container, blob_name, json.dumps(enriched))
         logging.info("Character inventories (enriched) fetched and saved for user: %s", membership_id)
         return enriched, 200
 
-    def get_manifest_item(self, item_hash: str | int, definition_type: str = None) -> tuple[dict, int]:
+    def get_manifest_item(self, item_hash: str | int, definition_type: str | None = None) -> tuple[dict | None, int]:
         """
         Resolve a Destiny 2 item hash against manifest definitions.
 
@@ -393,10 +485,8 @@ class VaultAssistant:
         """
         if definition_type:
             definition = self.manifest_cache.resolve_exact(item_hash, definition_type)
-            if definition:
-                return definition, 200
-            return None, 404
-        # If no type specified, search all required types
+            return (definition, 200) if definition else (None, 404)
+
         for def_type in BUNGIE_REQUIRED_DEFS:
             definition = self.manifest_cache.resolve_exact(item_hash, def_type)
             if definition:
@@ -415,7 +505,7 @@ class VaultAssistant:
             tuple[dict, int]: (result dict, 200) on success; error tuple otherwise.
         """
         logging.info("Saving DIM backup for user: %s", membership_id)
-        timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         blob_name, hash_key, timestamp = save_dim_backup_blob(
             self.storage_conn_str, self.table_name, membership_id, dim_json_str, timestamp=timestamp)
         logging.info("DIM backup saved for user: %s", membership_id)
@@ -450,7 +540,7 @@ class VaultAssistant:
     def decode_vault(
         self,
         include_perks: bool = False,
-        limit: int = None,
+        limit: int | None = None,
         offset: int = 0,
         *,
         force_refresh: bool = False,
@@ -474,20 +564,21 @@ class VaultAssistant:
         session = self.get_session()
         membership_id = session["membership_id"]
         membership_type = session["membership_type"]
-        headers = {
-            "Authorization": f"Bearer {session['access_token']}",
-            "X-API-Key": self.api_key
-            }
+        headers = self._build_headers(session["access_token"])
 
         decoded_blob_name = f"{membership_id}-vault-decoded.json"
-        date_last_played = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)[0]
+        date_last_played, _ = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)
         if not force_refresh and date_last_played:
-            blob_data = load_valid_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, date_last_played)
-            if blob_data:
+            blob_data = load_valid_blob(
+                self.storage_conn_str,
+                self.blob_container,
+                decoded_blob_name,
+                date_last_played,
+            )
+            if blob_data is not None:
                 logging.info("Using cached decoded vault from blob for user: %s", membership_id)
                 decoded_items = json.loads(blob_data)
-                paged_items = decoded_items[offset:offset + limit] if limit is not None else decoded_items[offset:]
-                return paged_items, 200
+                return self._page_items(decoded_items, limit, offset), 200
 
         logging.info("Decoding vault inventory for user: %s", membership_id)
         blob_name = f"{membership_id}.json"
@@ -495,54 +586,35 @@ class VaultAssistant:
         if blob_data is None:
             logging.error("Vault blob not found for user: %s", membership_id)
             return [], 404
+
         items = json.loads(blob_data)
-        paged_items = items[offset:offset + limit] if limit is not None else items[offset:]
+        components_map = self._fetch_item_components_map(
+            membership_id,
+            membership_type,
+            headers,
+            context="vault decode",
+        )
+        vault_model = VaultModel.from_components(items, components_map)
+        decoded_items_full = self._serialize_item_models(vault_model.items, include_perks)
+        paged_items = self._page_items(decoded_items_full, limit, offset)
+        should_sync = self._should_sync_decoded_payload(force_refresh, limit, offset)
 
-        components_map: dict[str, dict] = {}
-        try:
-            components_url = (
-                f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components="
-                "300,302,304,305,310"
-            )
-            components_resp = retry_request(
-                requests.get, components_url, headers=headers, timeout=self.timeout)
-            if components_resp.ok:
-                components_payload = components_resp.json().get("Response", {}).get("itemComponents", {})
-                components_map = self._merge_item_components(components_payload)
-            else:
-                logging.warning(
-                    "Failed to fetch item components for vault decode. Status: %d",
-                    components_resp.status_code
-                )
-        except (RequestException, ValueError) as exc:
-            logging.warning("Error fetching item components for vault decode: %s", exc)
-
-        # Use VaultModel.from_components to decode and enrich inventory
-        vault_model = VaultModel.from_components(paged_items, components_map)
-        decoded_items = []
-        for item in vault_model.items:
-            decoded = item.model_dump()
-            if include_perks and hasattr(item, "perks"):
-                decoded["perks"] = item.perks
-            decoded_items.append(decoded)
-
-        # Persist to DB if returning full set (on-demand agent)
-        if limit is None and offset == 0 and VaultSentinelDBAgent.is_db_configured():
+        if VaultSentinelDBAgent.is_db_configured() and should_sync:
             try:
-                _agent = VaultSentinelDBAgent.instance()
-                if getattr(_agent, "Session", None):
-                    _agent.persist_vault(vault_model, membership_id, membership_type)
+                db_agent = VaultSentinelDBAgent.instance()
+                if getattr(db_agent, "session_factory", None):
+                    db_agent.persist_vault(vault_model, membership_id, membership_type)
             except (RuntimeError, AttributeError, SQLAlchemyError) as e:  # type: ignore[arg-type]
                 logging.warning("Skipping DB persist_vault due to initialization error: %s", e)
-        if limit is None and offset == 0:
-            save_blob(self.storage_conn_str, self.blob_container,
-                    decoded_blob_name, json.dumps(decoded_items))
-        return decoded_items, 200
+
+        if should_sync:
+            save_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, json.dumps(decoded_items_full))
+        return paged_items, 200
 
     def decode_characters(
         self,
         include_perks: bool = False,
-        limit: int = None,
+        limit: int | None = None,
         offset: int = 0,
         *,
         force_refresh: bool = False,
@@ -566,19 +638,20 @@ class VaultAssistant:
         session = self.get_session()
         membership_id = session["membership_id"]
         membership_type = session["membership_type"]
-        headers = {
-            "Authorization": f"Bearer {session['access_token']}",
-            "X-API-Key": self.api_key
-            }
+        headers = self._build_headers(session["access_token"])
 
         decoded_blob_name = f"{membership_id}-characters-decoded.json"
-        date_last_played = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)[0]
+        date_last_played, _ = self.get_bungie_profile_last_modified(membership_id, membership_type, headers)
         if not force_refresh and date_last_played:
-            blob_data = load_valid_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, date_last_played)
+            blob_data = load_valid_blob(
+                self.storage_conn_str,
+                self.blob_container,
+                decoded_blob_name,
+                date_last_played,
+            )
             if blob_data is not None:
                 logging.info("Using cached decoded characters from blob for user: %s", membership_id)
-                decoded_characters = json.loads(blob_data)
-                return decoded_characters, 200
+                return json.loads(blob_data), 200
 
         logging.info("Decoding character inventories for user: %s", membership_id)
         blob_name = f"{membership_id}-characters.json"
@@ -592,57 +665,39 @@ class VaultAssistant:
             logging.error("Unexpected characters blob format (expected dict of characterId->{items}).")
             return [], 400
 
-        components_map: dict[str, dict] = {}
-        try:
-            components_url = (
-                f"{self.api_base}/Destiny2/{membership_type}/Profile/{membership_id}/?components="
-                "300,302,304,305,310"
-            )
-            components_resp = retry_request(
-                requests.get, components_url, headers=headers, timeout=self.timeout)
-            if components_resp.ok:
-                components_payload = components_resp.json().get("Response", {}).get("itemComponents", {})
-                components_map = self._merge_item_components(components_payload)
-            else:
-                logging.warning(
-                    "Failed to fetch item components for character decode. Status: %d",
-                    components_resp.status_code
-                )
-        except (RequestException, ValueError) as exc:
-            logging.warning("Error fetching item components for character decode: %s", exc)
-
-        decoded_characters: list[dict] = []
+        components_map = self._fetch_item_components_map(
+            membership_id,
+            membership_type,
+            headers,
+            context="character decode",
+        )
+        decoded_characters_full: list[dict] = []
+        decoded_characters_page: list[dict] = []
         character_models = []
-        for _, char_data in raw.items():
-            char_items = char_data.get("items", [])
-            paged_items = char_items[offset:offset + limit] if limit is not None else char_items[offset:]
-            char_data_no_items = {k: v for k, v in char_data.items() if k != "items"}
-            artifact_raw = char_data.get("artifact") if isinstance(char_data.get("artifact"), dict) else None
-            char_model = CharacterModel.from_components(
-                char_data_no_items, paged_items, components_map, artifact_raw=artifact_raw)
-            char_dict = char_model.model_dump()
-            cleaned_items: list[dict] = []
-            for it in char_model.items:
-                it_dict = it.model_dump()
-                if not include_perks and "perks" in it_dict:
-                    it_dict.pop("perks", None)
-                cleaned_items.append(it_dict)
-            char_dict["items"] = cleaned_items
-            decoded_characters.append(char_dict)
+        for char_data in raw.values():
+            char_model, full_char_dict, paged_char_dict = self._decode_character_payload(
+                char_data,
+                components_map,
+                include_perks,
+                limit,
+                offset,
+            )
             character_models.append(char_model)
+            decoded_characters_full.append(full_char_dict)
+            decoded_characters_page.append(paged_char_dict)
 
-        # Persist to DB if returning full set (on-demand agent)
-        if limit is None and offset == 0 and VaultSentinelDBAgent.is_db_configured():
+        should_sync = self._should_sync_decoded_payload(force_refresh, limit, offset)
+        if VaultSentinelDBAgent.is_db_configured() and should_sync:
             try:
-                _agent = VaultSentinelDBAgent.instance()
-                if getattr(_agent, "Session", None):
-                    _agent.persist_characters(character_models, membership_id, membership_type)
+                db_agent = VaultSentinelDBAgent.instance()
+                if getattr(db_agent, "session_factory", None):
+                    db_agent.persist_characters(character_models, membership_id, membership_type)
             except (RuntimeError, AttributeError, SQLAlchemyError) as e:  # type: ignore[arg-type]
                 logging.warning("Skipping DB persist_characters due to initialization error: %s", e)
-        if limit is None and offset == 0:
-            save_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, json.dumps(decoded_characters))
+        if should_sync:
+            save_blob(self.storage_conn_str, self.blob_container, decoded_blob_name, json.dumps(decoded_characters_full))
 
-        return decoded_characters, 200
+        return decoded_characters_page, 200
 
     def get_session_token(self) -> tuple[dict, int]:
         """
@@ -677,8 +732,10 @@ class VaultAssistant:
             logging.error("MIME object missing filename or content.")
             return {"error": "Missing filename or content in MIME object."}, 400
         try:
-            # Use save_blob helper with content_type
-            save_blob(self.storage_conn_str, self.blob_container, filename, content, content_type=content_type)
+            if content_type:
+                save_blob(self.storage_conn_str, self.blob_container, filename, content, content_type=content_type)
+            else:
+                save_blob(self.storage_conn_str, self.blob_container, filename, content)
             container_url = BlobServiceClient.from_connection_string(self.storage_conn_str).get_container_client(self.blob_container).url
             blob_url = f"{container_url}/{filename}"
             logging.info("Saved MIME object as blob: %s", blob_url)
@@ -687,7 +744,7 @@ class VaultAssistant:
             logging.error("Failed to save MIME object: %s", e)
             return {"error": f"Failed to save object: {e}"}, 500
 
-    def get_item_full_info(self, item_hash: str, item_instance_id: str = None) -> tuple[dict | None, int]:
+    def get_item_full_info(self, item_hash: str, item_instance_id: str | None = None) -> tuple[dict | None, int]:
         """
         Retrieve full information for an item, including perks, stats, and other properties.
 
@@ -704,7 +761,7 @@ class VaultAssistant:
             "itemHash": item_hash,
             "itemInstanceId": item_instance_id
         }
-        item_model = ItemModel.from_raw_data(raw_data, self.session_manager, self.manifest_cache, item_instance_id)
+        item_model = ItemModel.from_components(raw_data)
         if item_model.itemName == "Unknown":
             logging.error("Item hash %s not found in manifest.", item_hash)
             return None, 404

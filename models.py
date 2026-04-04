@@ -23,6 +23,9 @@ from helpers import retry_request
 from manifest_cache import ManifestCache
 
 
+SYSUTCDATETIME_SQL = "SYSUTCDATETIME()"
+
+
 # --- Pydantic Models ---
 
 
@@ -56,19 +59,19 @@ class ItemModel(BaseModel):
 
     # Instance data
     itemHash: int
-    itemInstanceId: Optional[str]
+    itemInstanceId: Optional[str] = None
     itemName: str
     itemType: str
-    itemTier: Optional[str]
+    itemTier: Optional[str] = None
     stats: Dict[str, int] = Field(default_factory=dict)
     statDetails: List[ItemStatDetail] = Field(default_factory=list)
     perks: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
     energy: Optional[Dict[str, Any]] = None  # {type_hash, type_name, capacity, used, unused}
     sockets: Optional[List[Dict[str, Any]]] = None  # list of {index, visible, enabled, equipped{name,hash,icon}}
     sandboxPerks: Optional[List[Dict[str, Any]]] = None  # 302 perks (artifact/passives)
-    location: Optional[int]
+    location: Optional[int] = None
     isEquipped: bool = False
-    owner: Optional[str]
+    owner: Optional[str] = None
 
     @staticmethod
     def _extract_stats(stats_data, manifest_cache):
@@ -176,6 +179,89 @@ class ItemModel(BaseModel):
                 result.append({"socketIndex": idx, "choices": choices})
         return result
 
+    @staticmethod
+    def _merge_stat_details(
+        stat_details: Dict[int, ItemStatDetail],
+        details: List[ItemStatDetail],
+    ) -> None:
+        """Merge stat detail objects into a hash-indexed mapping."""
+        for detail in details:
+            stat_details[detail.hash] = detail
+
+    @staticmethod
+    def _resolve_item_metadata(manifest_cache: ManifestCache, item_hash: Any) -> tuple[dict, str, str, Optional[str]]:
+        """Resolve the manifest definition and display metadata for an item hash."""
+        item_def, _ = manifest_cache.resolve_manifest_hash(item_hash, ["DestinyInventoryItemDefinition"])
+        return (
+            item_def or {},
+            (item_def or {}).get("displayProperties", {}).get("name", "Unknown"),
+            (item_def or {}).get("itemTypeDisplayName", "Unknown"),
+            (item_def or {}).get("inventory", {}).get("tierTypeName", "Unknown"),
+        )
+
+    @classmethod
+    def _apply_prefetched_components(
+        cls,
+        components: dict,
+        manifest_cache: ManifestCache,
+        stats: Dict[str, int],
+        stat_details: Dict[int, ItemStatDetail],
+        perks: Dict[str, List[Dict[str, Any]]],
+    ) -> None:
+        """Populate item stats and perks from pre-fetched Bungie component payloads."""
+        inst = (components.get("instance") or {}).get("data", {})
+        energy = cls._extract_energy(inst.get("energy"), manifest_cache)
+        if energy:
+            perks["energy"] = [energy]
+
+        inst_stats, inst_details = cls._extract_stats(
+            (components.get("stats") or {}).get("data", {}).get("stats", {}),
+            manifest_cache,
+        )
+        stats.update(inst_stats)
+        cls._merge_stat_details(stat_details, inst_details)
+
+        sp_list = cls._extract_sandbox_perks(
+            (components.get("perks") or {}).get("data", {}).get("perks", []),
+            manifest_cache,
+        )
+        if sp_list:
+            perks["sandboxPerks"] = sp_list
+
+        sockets_out = cls._extract_sockets(
+            (components.get("sockets") or {}).get("data", {}).get("sockets", []),
+            manifest_cache,
+        )
+        if sockets_out:
+            perks["sockets"] = sockets_out
+
+        reusable_plugs = ((components.get("reusablePlugs") or {}).get("data", {}) or {}).get("plugs", {})
+        plug_choices = cls._extract_reusable_plugs(reusable_plugs, manifest_cache)
+        if plug_choices:
+            perks["reusablePlugs"] = plug_choices
+
+    @classmethod
+    def _apply_instance_info(
+        cls,
+        inst_info: dict,
+        stats: Dict[str, int],
+        stat_details: Dict[int, ItemStatDetail],
+        perks: Dict[str, List[Dict[str, Any]]],
+    ) -> None:
+        """Populate item stats and perks from live instance-specific Bungie lookups."""
+        stats.update(inst_info.get("instanceStats", {}))
+        cls._merge_stat_details(stat_details, inst_info.get("instanceStatDetails", []))
+        for source_key, target_key in (
+            ("energy", "energy"),
+            ("instanceSockets", "sockets"),
+            ("sandboxPerks", "sandboxPerks"),
+            ("reusablePlugs", "reusablePlugs"),
+        ):
+            value = inst_info.get(source_key)
+            if not value:
+                continue
+            perks[target_key] = [value] if target_key == "energy" else value
+
     @classmethod
     def from_components(
         cls,
@@ -188,60 +274,21 @@ class ItemModel(BaseModel):
         """
         manifest_cache = ManifestCache.instance()
         item_hash = raw_item.get("itemHash")
-        item_def, _ = manifest_cache.resolve_manifest_hash(item_hash, ["DestinyInventoryItemDefinition"])
-        item_name = (item_def or {}).get("displayProperties", {}).get("name", "Unknown")
-        item_type = (item_def or {}).get("itemTypeDisplayName", "Unknown")
-        item_tier = (item_def or {}).get("inventory", {}).get("tierTypeName", "Unknown")
+        item_def, item_name, item_type, item_tier = cls._resolve_item_metadata(manifest_cache, item_hash)
 
         stats: Dict[str, int] = {}
         stat_details: Dict[int, ItemStatDetail] = {}
-
         base_stats, base_details = cls._extract_stats((item_def or {}).get("stats", {}).get("stats", {}), manifest_cache)
         stats.update(base_stats)
-        for detail in base_details:
-            stat_details[detail.hash] = detail
-        perks: Dict[str, List[Dict[str, Any]]] = dict()
+        cls._merge_stat_details(stat_details, base_details)
+        perks: Dict[str, List[Dict[str, Any]]] = {}
 
         if components:
-            # 300 energy
-            inst = (components.get("instance") or {}).get("data", {})
-            energy = cls._extract_energy(inst.get("energy"), manifest_cache)
-            if energy:
-                perks["energy"] = [energy]
-            # 304 stats
-            inst_stats, inst_details = cls._extract_stats((components.get("stats") or {}).get("data", {}).get("stats", {}), manifest_cache)
-            stats.update(inst_stats)
-            for detail in inst_details:
-                stat_details[detail.hash] = detail
-            # 302 sandbox perks
-            sp_list = cls._extract_sandbox_perks((components.get("perks") or {}).get("data", {}).get("perks", []), manifest_cache)
-            if sp_list:
-                perks["sandboxPerks"] = sp_list
-            # 305 sockets
-            sockets_out = cls._extract_sockets((components.get("sockets") or {}).get("data", {}).get("sockets", []), manifest_cache)
-            if sockets_out:
-                perks["sockets"] = sockets_out
-            # 310 reusable plugs
-            rp = ((components.get("reusablePlugs") or {}).get("data", {}) or {}).get("plugs", {})
-            ro_list = cls._extract_reusable_plugs(rp, manifest_cache)
-            if ro_list:
-                perks["reusablePlugs"] = ro_list
-
-        # If no components provided, fetch instance info using singleton managers
-        if not components and raw_item.get("itemInstanceId"):
+            cls._apply_prefetched_components(components, manifest_cache, stats, stat_details, perks)
+        elif raw_item.get("itemInstanceId"):
             session_manager = BungieSessionManager.instance()
-            inst_info = cls._build_instance_info(raw_item.get("itemInstanceId"), session_manager, manifest_cache)
-            stats.update(inst_info.get("instanceStats", {}))
-            for detail in inst_info.get("instanceStatDetails", []):
-                stat_details[detail.hash] = detail
-            if "energy" in inst_info:
-                perks["energy"] = [inst_info["energy"]]
-            if "instanceSockets" in inst_info:
-                perks["sockets"] = inst_info["instanceSockets"]
-            if "sandboxPerks" in inst_info:
-                perks["sandboxPerks"] = inst_info["sandboxPerks"]
-            if "reusablePlugs" in inst_info:
-                perks["reusablePlugs"] = inst_info["reusablePlugs"]
+            instance_info = cls._build_instance_info(raw_item.get("itemInstanceId"), session_manager, manifest_cache)
+            cls._apply_instance_info(instance_info, stats, stat_details, perks)
 
         return cls(
             itemHash=item_hash,
@@ -256,6 +303,108 @@ class ItemModel(BaseModel):
             isEquipped=raw_item.get("isEquipped", False),
             owner=raw_item.get("owner"),
         )
+
+    @staticmethod
+    def _extract_batched_sandbox_perks(perks_data, sandbox_defs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Resolve sandbox perk display data using the pre-fetched sandbox definition map."""
+        sandbox_perks: List[Dict[str, Any]] = []
+        for perk in perks_data or []:
+            perk_hash = perk.get("perkHash")
+            if perk_hash is None:
+                continue
+            definition = sandbox_defs.get(str(int(perk_hash) & 0xFFFFFFFF), {})
+            display = (definition or {}).get("displayProperties", {})
+            sandbox_perks.append({
+                "hash": perk_hash,
+                "name": display.get("name", str(perk_hash)),
+                "icon": display.get("icon"),
+                "active": perk.get("isActive", False),
+                "visible": perk.get("visible", False),
+            })
+        return sandbox_perks
+
+    @staticmethod
+    def _extract_batched_sockets(sockets_data, plug_defs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Resolve equipped socket plug display data using the pre-fetched plug definition map."""
+        socket_entries: List[Dict[str, Any]] = []
+        for idx, socket in enumerate(sockets_data or []):
+            plug_hash = socket.get("plugHash")
+            plug = None
+            if plug_hash is not None:
+                definition = plug_defs.get(str(int(plug_hash) & 0xFFFFFFFF), {})
+                display = (definition or {}).get("displayProperties", {})
+                plug = {"hash": plug_hash, "name": display.get("name", str(plug_hash)), "icon": display.get("icon")}
+            socket_entries.append({
+                "socketIndex": idx,
+                "isEnabled": socket.get("isEnabled", False),
+                "isVisible": socket.get("isVisible", False),
+                "equipped": plug,
+            })
+        return socket_entries
+
+    @staticmethod
+    def _extract_batched_reusable_plugs(reusable_plugs, plug_defs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Resolve reusable plug choices using the pre-fetched plug definition map."""
+        results: List[Dict[str, Any]] = []
+        for idx_str, plugs in (reusable_plugs or {}).items():
+            try:
+                idx = int(idx_str)
+            except (TypeError, ValueError):
+                continue
+            choices = []
+            for plug in plugs or []:
+                plug_hash = plug.get("plugItemHash")
+                if plug_hash is None:
+                    continue
+                definition = plug_defs.get(str(int(plug_hash) & 0xFFFFFFFF), {})
+                display = (definition or {}).get("displayProperties", {})
+                choices.append({"hash": plug_hash, "name": display.get("name", str(plug_hash)), "icon": display.get("icon")})
+            if choices:
+                results.append({"socketIndex": idx, "choices": choices})
+        return results
+
+    @classmethod
+    def _apply_batched_components(
+        cls,
+        item_components: dict,
+        manifest_cache: ManifestCache,
+        plug_defs: Dict[str, Dict[str, Any]],
+        sandbox_defs: Dict[str, Dict[str, Any]],
+        stats: Dict[str, int],
+        stat_details: Dict[int, ItemStatDetail],
+        perks: Dict[str, List[Dict[str, Any]]],
+    ) -> None:
+        """Populate item data from batched component payloads and pre-resolved definition maps."""
+        inst_stats, inst_details = cls._extract_stats(
+            (item_components.get("stats") or {}).get("data", {}).get("stats", {}),
+            manifest_cache,
+        )
+        stats.update(inst_stats)
+        cls._merge_stat_details(stat_details, inst_details)
+
+        inst = (item_components.get("instance") or {}).get("data", {})
+        energy = cls._extract_energy(inst.get("energy"), manifest_cache)
+        if energy:
+            perks["energy"] = [energy]
+
+        sandbox_perks = cls._extract_batched_sandbox_perks(
+            (item_components.get("perks") or {}).get("data", {}).get("perks", []),
+            sandbox_defs,
+        )
+        if sandbox_perks:
+            perks["sandboxPerks"] = sandbox_perks
+
+        socket_entries = cls._extract_batched_sockets(
+            (item_components.get("sockets") or {}).get("data", {}).get("sockets", []),
+            plug_defs,
+        )
+        if socket_entries:
+            perks["sockets"] = socket_entries
+
+        reusable_plugs = ((item_components.get("reusablePlugs") or {}).get("data", {}) or {}).get("plugs", {})
+        plug_choices = cls._extract_batched_reusable_plugs(reusable_plugs, plug_defs)
+        if plug_choices:
+            perks["reusablePlugs"] = plug_choices
 
     @classmethod
     def from_components_batched(
@@ -275,84 +424,21 @@ class ItemModel(BaseModel):
         """
         manifest_cache = ManifestCache.instance()
         item_hash = raw_item.get("itemHash")
-        item_name = "Unknown"
-        item_type = "Unknown"
-        item_tier = None
-        item_def, _ = manifest_cache.resolve_manifest_hash(item_hash, ["DestinyInventoryItemDefinition"])
-        if item_def:
-            item_name = item_def.get("displayProperties", {}).get("name", item_name)
-            item_type = item_def.get("itemTypeDisplayName", item_type)
-            item_tier = item_def.get("inventory", {}).get("tierTypeName", None)
+        _, item_name, item_type, item_tier = cls._resolve_item_metadata(manifest_cache, item_hash)
 
         stats: Dict[str, int] = {}
         stat_details: Dict[int, ItemStatDetail] = {}
         perks: Dict[str, List[Dict[str, Any]]] = {}
-
         if item_components:
-            # 304 stats
-            inst_stats, inst_details = cls._extract_stats((item_components.get("stats") or {}).get("data", {}).get("stats", {}), manifest_cache)
-            stats.update(inst_stats)
-            for detail in inst_details:
-                stat_details[detail.hash] = detail
-            # 300 energy
-            inst = (item_components.get("instance") or {}).get("data", {})
-            energy = cls._extract_energy(inst.get("energy"), manifest_cache)
-            if energy:
-                perks["energy"] = [energy]
-            # 302 sandbox perks
-            sps = []
-            for p in ((item_components.get("perks") or {}).get("data", {}).get("perks", []) or []):
-                h = p.get("perkHash")
-                if h is None:
-                    continue
-                d = sandbox_defs.get(str(int(h) & 0xFFFFFFFF), {})
-                dp = (d or {}).get("displayProperties", {})
-                sps.append({
-                    "hash": h,
-                    "name": dp.get("name", str(h)),
-                    "icon": dp.get("icon"),
-                    "active": p.get("isActive", False),
-                    "visible": p.get("visible", False),
-                })
-            if sps:
-                perks["sandboxPerks"] = sps
-            # 305 sockets
-            sock_out = []
-            for idx, s in enumerate(((item_components.get("sockets") or {}).get("data", {}).get("sockets", []) or [])):
-                h = s.get("plugHash")
-                plug = None
-                if h is not None:
-                    d = plug_defs.get(str(int(h) & 0xFFFFFFFF), {})
-                    dp = (d or {}).get("displayProperties", {})
-                    plug = {"hash": h, "name": dp.get("name", str(h)), "icon": dp.get("icon")}
-                sock_out.append({
-                    "socketIndex": idx,
-                    "isEnabled": s.get("isEnabled", False),
-                    "isVisible": s.get("isVisible", False),
-                    "equipped": plug,
-                })
-            if sock_out:
-                perks["sockets"] = sock_out
-            # 310 reusable plugs (choices per socket) using pre-resolved plug defs
-            rp = ((item_components.get("reusablePlugs") or {}).get("data", {}) or {}).get("plugs", {})
-            result = []
-            for idx_str, plugs in rp.items():
-                try:
-                    idx = int(idx_str)
-                except (TypeError, ValueError):
-                    continue
-                choices = []
-                for p in plugs or []:
-                    h = p.get("plugItemHash")
-                    if h is None:
-                        continue
-                    d = plug_defs.get(str(int(h) & 0xFFFFFFFF), {})
-                    dp = (d or {}).get("displayProperties", {})
-                    choices.append({"hash": h, "name": dp.get("name", str(h)), "icon": dp.get("icon")})
-                if choices:
-                    result.append({"socketIndex": idx, "choices": choices})
-            if result:
-                perks["reusablePlugs"] = result
+            cls._apply_batched_components(
+                item_components,
+                manifest_cache,
+                plug_defs,
+                sandbox_defs,
+                stats,
+                stat_details,
+                perks,
+            )
 
         return cls(
             itemHash=item_hash,
@@ -460,9 +546,33 @@ class CharacterModel(BaseModel):
     emblemBackground: str
     level: int
     lastPlayed: str
-    items: List[ItemModel] = list()
+    items: List[ItemModel] = Field(default_factory=list)
     artifact: Optional[ItemModel] = None
     data_version: Optional[datetime] = None
+
+    @staticmethod
+    def _build_items(items_raw: List[dict], components_by_instance: Dict[str, dict]) -> List[ItemModel]:
+        """Build the character's decoded item models from raw payloads and instance components."""
+        items: List[ItemModel] = []
+        for item in items_raw:
+            instance_id = item.get("itemInstanceId")
+            components = components_by_instance.get(str(instance_id)) if instance_id else None
+            items.append(ItemModel.from_components(item, components=components))
+        return items
+
+    @staticmethod
+    def _build_artifact_model(artifact_raw: Optional[dict]) -> Optional[ItemModel]:
+        """Build the optional seasonal artifact model for a character/profile payload."""
+        if not artifact_raw or artifact_raw.get("itemHash") is None:
+            return None
+
+        artifact_model = ItemModel.from_components({"itemHash": artifact_raw.get("itemHash")}, components=None)
+        power_bonus = artifact_raw.get("powerBonus")
+        if power_bonus is not None:
+            artifact_perks = dict(artifact_model.perks or {})
+            artifact_perks.setdefault("artifactInfo", []).append({"powerBonus": power_bonus})
+            artifact_model.perks = artifact_perks
+        return artifact_model
 
     @classmethod
     def from_components(
@@ -477,46 +587,19 @@ class CharacterModel(BaseModel):
         Uses ManifestCache singleton internally; does not require it as a parameter.
         """
         char_id = str(character_blob.get("characterId"))
-        name = character_blob.get("displayName") or char_id
-        class_type = character_blob.get("class") or str(character_blob.get("classType"))
-        race = character_blob.get("race") or str(character_blob.get("raceHash"))
-        gender = character_blob.get("gender") or str(character_blob.get("genderHash"))
-        light = character_blob.get("light") or 0
-        emblem = character_blob.get("emblem") or ""
-        emblem_background = character_blob.get("emblemBackground") or ""
-        level = character_blob.get("level") or 0
-        last_played = character_blob.get("lastPlayed") or ""
-
-        items: List[ItemModel] = []
-        for it in items_raw:
-            iid = it.get("itemInstanceId")
-            comps = components_by_instance.get(str(iid)) if iid else None
-            items.append(ItemModel.from_components(it, components=comps))
-
-        artifact_model: Optional[ItemModel] = None
-        if artifact_raw and artifact_raw.get("itemHash") is not None:
-            # Build from manifest; artifacts typically lack instance data
-            artifact_model = ItemModel.from_components({"itemHash": artifact_raw.get("itemHash")}, components=None)
-            # Optionally attach power bonus metadata if present
-            power_bonus = artifact_raw.get("powerBonus")
-            if power_bonus is not None:
-                if artifact_model.perks is None:
-                    artifact_model.perks = {}
-                artifact_model.perks.setdefault("artifactInfo", []).append({"powerBonus": power_bonus})
-
         return cls(
             charId=char_id,
-            name=name,
-            classType=class_type,
-            race=race,
-            gender=gender,
-            light=light,
-            emblem=emblem,
-            emblemBackground=emblem_background,
-            level=level,
-            lastPlayed=last_played,
-            items=items,
-            artifact=artifact_model
+            name=character_blob.get("displayName") or char_id,
+            classType=character_blob.get("class") or str(character_blob.get("classType")),
+            race=character_blob.get("race") or str(character_blob.get("raceHash")),
+            gender=character_blob.get("gender") or str(character_blob.get("genderHash")),
+            light=character_blob.get("light") or 0,
+            emblem=character_blob.get("emblem") or "",
+            emblemBackground=character_blob.get("emblemBackground") or "",
+            level=character_blob.get("level") or 0,
+            lastPlayed=character_blob.get("lastPlayed") or "",
+            items=cls._build_items(items_raw, components_by_instance),
+            artifact=cls._build_artifact_model(artifact_raw),
         )
 
 class VaultModel(BaseModel):
@@ -527,7 +610,7 @@ class VaultModel(BaseModel):
         items (List[ItemModel]): List of items in the shared vault.
         data_version (Optional[datetime]): Bungie dateLastPlayed as datetime for freshness/version.
     """
-    items: List[ItemModel] = list()
+    items: List[ItemModel] = Field(default_factory=list)
     data_version: Optional[datetime] = None
 
     @classmethod
@@ -560,7 +643,7 @@ class User(Base):
     membership_id = Column(String(50), nullable=False)
     membership_type = Column(String(20), nullable=False)
     display_name = Column(String(100))
-    created_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
+    created_at = Column(DateTime, nullable=False, server_default=text(SYSUTCDATETIME_SQL))
     characters = relationship("Character", back_populates="user")
 
 class Character(Base):
@@ -573,7 +656,7 @@ class Character(Base):
     class_type = Column(String(50))
     light = Column(Integer)
     race_hash = Column(BigInteger)
-    created_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
+    created_at = Column(DateTime, nullable=False, server_default=text(SYSUTCDATETIME_SQL))
     user = relationship("User", back_populates="characters")
     items = relationship("Item", back_populates="character")
     __table_args__ = (Index('IX_Characters_UserId', 'user_id'),)
@@ -586,8 +669,8 @@ class Vault(Base):
     __tablename__ = 'Vaults'
     vault_id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, ForeignKey('Users.user_id'), nullable=False)
-    created_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
-    updated_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
+    created_at = Column(DateTime, nullable=False, server_default=text(SYSUTCDATETIME_SQL))
+    updated_at = Column(DateTime, nullable=False, server_default=text(SYSUTCDATETIME_SQL))
     items = relationship("Item", back_populates="vault")
 
 
@@ -610,8 +693,8 @@ class Item(Base):
     collectible_hash = Column(BigInteger)
     power_cap_hash = Column(BigInteger)
     season_hash = Column(BigInteger)
-    updated_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
-    created_at = Column(DateTime, nullable=False, server_default=text("SYSUTCDATETIME()"))
+    updated_at = Column(DateTime, nullable=False, server_default=text(SYSUTCDATETIME_SQL))
+    created_at = Column(DateTime, nullable=False, server_default=text(SYSUTCDATETIME_SQL))
     character = relationship("Character", back_populates="items")
     vault = relationship("Vault", back_populates="items")
     stats = relationship("ItemStat", back_populates="item")
