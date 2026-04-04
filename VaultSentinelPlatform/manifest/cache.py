@@ -151,7 +151,8 @@ class ManifestCache:
         limit: int = 25,
     ):
         """Search a manifest definition table by display name."""
-        return self._get_query_service().search_definitions_by_name(
+        query_service = self._get_query_service()
+        return query_service.search_definitions_by_name(
             definition_type,
             query_text,
             limit=limit,

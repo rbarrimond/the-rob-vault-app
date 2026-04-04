@@ -278,7 +278,11 @@ class ManifestSQLiteQueryService:
                 )
                 rows = cursor.fetchall()
             except sqlite3.Error as exc:
-                logging.error("Manifest name search failed for %s: %s", definition_type, exc)
+                logging.error(
+                    "Manifest name search failed for %s: %s",
+                    definition_type,
+                    exc,
+                )
                 return []
 
         for row in rows:
