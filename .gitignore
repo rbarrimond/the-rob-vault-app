@@ -3,11 +3,23 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.py[cod]
+*$py.class
 .Python
+*.egg-info/
+*.egg
+.python_packages/
+.python-version
+
+# Virtual environments
 .venv/
 venv/
 env/
-.python-version
+ENV/
+
+# Build artifacts
+dist/
+build/
 
 # Azurite local emulator artifacts
 .azurite/
@@ -16,17 +28,28 @@ __queuestorage__/
 __tablestorage__/
 azurite_db*.
 
-# Local overrides
+# Local overrides and environment files
 requirements.local
-
-# Azure Functions local settings (do not commit secrets)
 local.settings.json
-
-# Environment files
 .env
 .env.*
 
+# Azure
+.azure/
+.Azure/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
 # OS / IDE
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
+*.code-workspace
+*.swp
+*.swo
+*~
+
