@@ -957,21 +957,20 @@ class VaultSentinelDBAgent:
     def persist_vault(self, vault_model, membership_id, membership_type):
         """
         Persist a VaultModel to the database using ORM models.
+
         Args:
             vault_model: VaultModel instance
             membership_id: Destiny 2 membership ID
             membership_type: Destiny 2 membership type
+
         Returns:
-            dict: Result status
+            dict: Result status on success.
+
+        Raises:
+            DependencyUnavailableError: If the database dependency is unavailable.
+            BusinessRuleViolationError: If ORM-generated identifiers violate the domain contract.
         """
-        try:
-            session = self._get_session_with_cold_start_handling()
-        except DependencyUnavailableError as e:
-            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e, exc_info=True)
-            return {
-                "status": "error",
-                "error": self._DATABASE_UNAVAILABLE_MESSAGE,
-            }
+        session = self._get_session_with_cold_start_handling()
 
         try:
             user_obj = self._get_or_create_user(session, membership_id, membership_type)
@@ -986,31 +985,32 @@ class VaultSentinelDBAgent:
         except (SQLAlchemyError, pyodbc.Error) as e:
             session.rollback()
             logging.error("Failed to persist vault: %s", e, exc_info=True)
-            return {
-                "status": "error",
-                "error": "Failed to persist vault data. Check logs.",
-            }
+            self._raise_dependency_unavailable(
+                "Failed to persist vault data. Check logs.",
+                cause=e,
+                dependency="database_session",
+                operation="persist_vault",
+            )
         finally:
             session.close()
 
     def persist_characters(self, character_models, membership_id, membership_type):
         """
         Persist a list of CharacterModel instances to the database using ORM models.
+
         Args:
             character_models: List of CharacterModel instances
             membership_id: Destiny 2 membership ID
             membership_type: Destiny 2 membership type
+
         Returns:
-            dict: Result status
+            dict: Result status on success.
+
+        Raises:
+            DependencyUnavailableError: If the database dependency is unavailable.
+            BusinessRuleViolationError: If ORM-generated identifiers violate the domain contract.
         """
-        try:
-            session = self._get_session_with_cold_start_handling()
-        except DependencyUnavailableError as e:
-            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e, exc_info=True)
-            return {
-                "status": "error",
-                "error": self._DATABASE_UNAVAILABLE_MESSAGE,
-            }
+        session = self._get_session_with_cold_start_handling()
 
         try:
             user_obj = self._get_or_create_user(session, membership_id, membership_type)
@@ -1032,31 +1032,31 @@ class VaultSentinelDBAgent:
         except (SQLAlchemyError, pyodbc.Error) as e:
             session.rollback()
             logging.error("Failed to persist characters: %s", e, exc_info=True)
-            return {
-                "status": "error",
-                "error": "Failed to persist character data. Check logs.",
-            }
+            self._raise_dependency_unavailable(
+                "Failed to persist character data. Check logs.",
+                cause=e,
+                dependency="database_session",
+                operation="persist_characters",
+            )
         finally:
             session.close()
 
     def persist_item(self, item_model, character_id=None, vault_id=None):
         """
         Persist a single ItemModel to the database using ORM models.
+
         Args:
             item_model: ItemModel instance
             character_id: Optional character_id to associate
             vault_id: Optional vault_id to associate
+
         Returns:
-            dict: Result status
+            dict: Result status on success.
+
+        Raises:
+            DependencyUnavailableError: If the database dependency is unavailable.
         """
-        try:
-            session = self._get_session_with_cold_start_handling()
-        except DependencyUnavailableError as e:
-            logging.error(self._DB_SESSION_ERROR_TEMPLATE, e, exc_info=True)
-            return {
-                "status": "error",
-                "error": self._DATABASE_UNAVAILABLE_MESSAGE,
-            }
+        session = self._get_session_with_cold_start_handling()
 
         try:
             self._persist_item_record(session, item_model, character_id=character_id, vault_id=vault_id)
@@ -1065,10 +1065,12 @@ class VaultSentinelDBAgent:
         except (SQLAlchemyError, pyodbc.Error) as e:
             session.rollback()
             logging.error("Failed to persist item: %s", e, exc_info=True)
-            return {
-                "status": "error",
-                "error": "Failed to persist item data. Check logs.",
-            }
+            self._raise_dependency_unavailable(
+                "Failed to persist item data. Check logs.",
+                cause=e,
+                dependency="database_session",
+                operation="persist_item",
+            )
         finally:
             session.close()
 

@@ -1,5 +1,6 @@
 """Unit tests for VaultSentinelDBAgent."""
 # pylint: disable=import-error,protected-access
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -126,4 +127,34 @@ def test_process_query_raises_business_rule_violation_for_rejected_sql() -> None
     ):
         with pytest.raises(BusinessRuleViolationError, match="Generated SQL violated Vault Sentinel safety rules"):
             agent.process_query(get_valid_query())
+
+
+def test_persist_vault_raises_dependency_error_when_session_unavailable() -> None:
+    """Persistence should surface DB-session outages as typed dependency errors."""
+    VaultSentinelDBAgent.reset_instance()
+    agent = VaultSentinelDBAgent.instance()
+
+    with patch.object(
+        agent,
+        "_get_session_with_cold_start_handling",
+        side_effect=DependencyUnavailableError("driver offline"),
+    ):
+        with pytest.raises(DependencyUnavailableError, match="driver offline"):
+            agent.persist_vault(SimpleNamespace(items=[]), "member-1", "3")
+
+
+def test_persist_vault_translates_sqlalchemy_failures_to_dependency_errors() -> None:
+    """Unexpected ORM write failures should preserve dependency semantics and causality."""
+    VaultSentinelDBAgent.reset_instance()
+    agent = VaultSentinelDBAgent.instance()
+    mock_session = MagicMock()
+
+    with (
+        patch.object(agent, "_get_session_with_cold_start_handling", return_value=mock_session),
+        patch.object(agent, "_get_or_create_user", side_effect=SQLAlchemyError("insert failed")),
+    ):
+        with pytest.raises(DependencyUnavailableError, match="Failed to persist vault data") as exc_info:
+            agent.persist_vault(SimpleNamespace(items=[]), "member-1", "3")
+
+    assert exc_info.value.__cause__ is not None
 
