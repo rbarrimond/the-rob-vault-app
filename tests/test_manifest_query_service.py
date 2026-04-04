@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -111,6 +112,42 @@ def test_query_service_supports_name_search():
         assert results[0]["displayProperties"]["name"] == "Midnight Coup"
     finally:
         service.close()
+
+
+def test_query_service_wraps_lookup_failures_as_dependency_errors() -> None:
+    """Runtime SQLite lookup failures should be translated into platform dependency errors."""
+    service = ManifestSQLiteQueryService(_build_manifest_bytes())
+    fake_cursor = MagicMock()
+    fake_cursor.execute.side_effect = sqlite3.Error("malformed manifest table")
+    fake_connection = MagicMock()
+    fake_connection.cursor.return_value = fake_cursor
+
+    try:
+        with patch.object(service, "_connect", return_value=fake_connection):
+            with pytest.raises(DependencyUnavailableError, match="Manifest lookup failed") as exc_info:
+                service.resolve_exact(SAMPLE_ITEM_HASH, "DestinyInventoryItemDefinition")
+    finally:
+        service.close()
+
+    assert exc_info.value.__cause__ is not None
+
+
+def test_query_service_wraps_name_search_failures_as_dependency_errors() -> None:
+    """Manifest name search should not leak raw sqlite exceptions to callers."""
+    service = ManifestSQLiteQueryService(_build_manifest_bytes())
+    fake_cursor = MagicMock()
+    fake_cursor.execute.side_effect = sqlite3.Error("sqlite is locked")
+    fake_connection = MagicMock()
+    fake_connection.cursor.return_value = fake_cursor
+
+    try:
+        with patch.object(service, "_connect", return_value=fake_connection):
+            with pytest.raises(DependencyUnavailableError, match="Manifest name search failed") as exc_info:
+                service.search_definitions_by_name("DestinyInventoryItemDefinition", "midnight")
+    finally:
+        service.close()
+
+    assert exc_info.value.__cause__ is not None
 
 
 def test_query_service_raises_business_exception_when_manifest_bytes_missing():

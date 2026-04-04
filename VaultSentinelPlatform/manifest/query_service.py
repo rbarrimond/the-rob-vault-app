@@ -8,7 +8,7 @@ import logging
 import sqlite3
 import threading
 from collections import defaultdict
-from typing import Any, Optional, Sequence
+from typing import Any, Never, Optional, Sequence
 
 from VaultSentinelPlatform.common.helpers import normalize_item_hash
 from VaultSentinelPlatform.config import BUNGIE_REQUIRED_DEFS
@@ -30,6 +30,16 @@ class ManifestSQLiteQueryService:
         self._memo = defaultdict(dict)
         self._small_defs: dict[str, dict[str, dict]] = {}
         self._warned_single_get_definitions = False
+
+    @staticmethod
+    def _raise_manifest_dependency_error(
+        message: str,
+        *,
+        cause: Exception,
+        **details: Any,
+    ) -> Never:
+        """Translate manifest runtime failures into the platform dependency hierarchy."""
+        raise DependencyUnavailableError(message, details=details) from cause
 
     def _connect(self) -> sqlite3.Connection:
         """Open the manifest SQLite database from the in-memory payload."""
@@ -115,8 +125,12 @@ class ManifestSQLiteQueryService:
         ):
             try:
                 self._small_defs[definition_type] = self.get_all_definitions(definition_type)
-            except (sqlite3.Error, ValueError, TypeError):
-                logging.debug("Skipping manifest prewarm for %s.", definition_type)
+            except DependencyUnavailableError as exc:
+                logging.debug(
+                    "Skipping manifest prewarm for %s due to dependency issue: %s",
+                    definition_type,
+                    exc,
+                )
 
     @staticmethod
     def _normalize_hash_value(item_hash: int | str) -> int:
@@ -170,6 +184,13 @@ class ManifestSQLiteQueryService:
                         definition_type,
                         len(parameters),
                         exc,
+                        exc_info=True,
+                    )
+                    self._raise_manifest_dependency_error(
+                        "Manifest batch lookup failed.",
+                        cause=exc,
+                        definition_type=definition_type,
+                        item_count=len(parameters),
                     )
         return resolved
 
@@ -205,6 +226,13 @@ class ManifestSQLiteQueryService:
                     normalized,
                     signed_hash,
                     exc,
+                    exc_info=True,
+                )
+                self._raise_manifest_dependency_error(
+                    "Manifest lookup failed.",
+                    cause=exc,
+                    definition_type=definition_type,
+                    item_hash=normalized,
                 )
         return None
 
@@ -250,6 +278,12 @@ class ManifestSQLiteQueryService:
                     "Manifest get_all_definitions failed for %s: %s",
                     definition_type,
                     exc,
+                    exc_info=True,
+                )
+                self._raise_manifest_dependency_error(
+                    "Manifest definition enumeration failed.",
+                    cause=exc,
+                    definition_type=definition_type,
                 )
         return definitions
 
@@ -310,8 +344,15 @@ class ManifestSQLiteQueryService:
                     "Manifest name search failed for %s: %s",
                     definition_type,
                     exc,
+                    exc_info=True,
                 )
-                return []
+                self._raise_manifest_dependency_error(
+                    "Manifest name search failed.",
+                    cause=exc,
+                    definition_type=definition_type,
+                    query=normalized_query,
+                    limit=limit,
+                )
 
         for row in rows:
             try:
