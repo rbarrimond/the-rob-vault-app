@@ -1,0 +1,512 @@
+{
+  "info": {
+    "name": "Destiny Vault Assistant API",
+    "description": "Postman collection for exercising the Azure Functions API exposed by `function_app.py`.\n\nDefaults target the Azure-hosted instance provisioned by `azure-infra` at `https://therobvault.azure.barrimond.net/api`. A `localBaseUrl` variable is included for local runs. Set `functionKey`, `accessToken`, `membershipId`, and `oauthCode` in the collection variables as needed to exercise the protected flows.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "x-functions-key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{functionKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://therobvault.azure.barrimond.net/api"
+    },
+    {
+      "key": "azureBaseUrl",
+      "value": "https://therobvault.azure.barrimond.net/api"
+    },
+    {
+      "key": "localBaseUrl",
+      "value": "http://localhost:7071/api"
+    },
+    {
+      "key": "functionKey",
+      "value": ""
+    },
+    {
+      "key": "oauthCode",
+      "value": ""
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "membershipId",
+      "value": ""
+    },
+    {
+      "key": "manifestHash",
+      "value": "1274330687"
+    },
+    {
+      "key": "manifestType",
+      "value": "DestinyInventoryItemDefinition"
+    },
+    {
+      "key": "sampleFilename",
+      "value": "postman-sample.txt"
+    },
+    {
+      "key": "sampleContent",
+      "value": "Hello from Postman"
+    },
+    {
+      "key": "dimBackup",
+      "value": "{\"version\":\"1.0\",\"source\":\"postman\",\"items\":[]}"
+    }
+  ],
+  "item": [
+    {
+      "name": "Public & Auth",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/health",
+            "description": "Anonymous health endpoint used for diagnostics and Azure monitoring."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('health returns 200', function () {", 
+                  "    pm.response.to.have.status(200);", 
+                  "});",
+                  "const data = pm.response.json();",
+                  "pm.test('health payload contains ok status', function () {",
+                  "    pm.expect(data.status).to.eql('ok');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "OAuth Callback",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/auth?code={{oauthCode}}",
+            "description": "Public Bungie OAuth callback. Provide a real `oauthCode` after authenticating with Bungie to complete the flow."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('auth endpoint is reachable', function () {",
+                  "    pm.expect([200, 400, 500]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Initialize Assistant Session",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"access_token\": \"{{accessToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/assistant/init",
+            "description": "Anonymous bootstrap endpoint that initializes the assistant session after OAuth succeeds."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('assistant init endpoint is reachable', function () {",
+                  "    pm.expect([200, 400, 500]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Session",
+      "item": [
+        {
+          "name": "Get Session Info",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/session",
+            "description": "Returns the current Bungie session info. Requires a valid function key and an initialized session."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('session endpoint responded', function () {",
+                  "    pm.expect([200, 401, 403, 500]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Session Token",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/session/token",
+            "description": "Returns the access token and membership ID if a session is active."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('session token endpoint responded', function () {",
+                  "    pm.expect([200, 401, 403, 500]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "    const data = pm.response.json();",
+                  "    if (data.access_token) pm.collectionVariables.set('accessToken', data.access_token);",
+                  "    if (data.membership_id) pm.collectionVariables.set('membershipId', data.membership_id);",
+                  "    if (data.membershipId) pm.collectionVariables.set('membershipId', data.membershipId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/token/refresh",
+            "description": "Refreshes the Bungie access token using the stored refresh token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refresh token endpoint responded', function () {",
+                  "    pm.expect([200, 403, 500]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Inventory",
+      "item": [
+        {
+          "name": "Get Vault Inventory",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/vault?limit=25&offset=0&compress=false&forceRefresh=false",
+            "description": "Fetches raw vault inventory with pagination options."
+          }
+        },
+        {
+          "name": "Get Decoded Vault Inventory",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/vault/decoded?includePerks=true&limit=25&offset=0&compress=false&forceRefresh=false",
+            "description": "Fetches the decoded vault inventory with perks included."
+          }
+        },
+        {
+          "name": "Get Character Equipment",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/characters?limit=20&offset=0&compress=false",
+            "description": "Returns character equipment grouped by character."
+          }
+        },
+        {
+          "name": "Get Decoded Character Equipment",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/characters/decoded?includePerks=true&limit=20&offset=0&compress=false&forceRefresh=false",
+            "description": "Returns decoded character equipment with optional perks and refresh controls."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Manifest & Storage",
+      "item": [
+        {
+          "name": "Get Manifest Item",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/manifest/item?hash={{manifestHash}}&type={{manifestType}}",
+            "description": "Look up a Destiny manifest definition by hash and definition type."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('manifest lookup responded', function () {",
+                  "    pm.expect([200, 400, 404]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Save DIM Backup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"membership_id\": \"{{membershipId}}\",\n  \"dim_backup\": {{dimBackup}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/dim/backup",
+            "description": "Stores a DIM backup payload for the configured membership ID."
+          }
+        },
+        {
+          "name": "List DIM Backups",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/dim/list",
+            "description": "Lists stored DIM backups for the active session membership ID."
+          }
+        },
+        {
+          "name": "Save Object to Blob",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filename\": \"{{sampleFilename}}\",\n  \"content_type\": \"text/plain\",\n  \"content\": \"{{sampleContent}}\",\n  \"encoding\": \"utf-8\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/save",
+            "description": "Saves an arbitrary object or file payload to Azure Blob Storage."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Agent Queries",
+      "item": [
+        {
+          "name": "Query Agent - List Items by Stat",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"intent\": \"list_items_by_stat\",\n  \"filters\": {\n    \"statThreshold\": {\n      \"gte\": 65,\n      \"stat\": \"Discipline\"\n    },\n    \"type\": \"armor\",\n    \"location\": [\"vault\"],\n    \"classType\": \"Warlock\"\n  },\n  \"output\": {\n    \"includePerks\": true,\n    \"includeStats\": true,\n    \"includeInstanceData\": true\n  },\n  \"sort\": {\n    \"field\": \"statValue\",\n    \"direction\": \"desc\"\n  },\n  \"limit\": 25\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/query",
+            "description": "Example Vault Sentinel query lifted from `tests/sample_queries.json`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('query endpoint responded', function () {",
+                  "    pm.expect([200, 400, 401, 403, 500, 503]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Query Agent - Validation Error Contract",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"intent\": \"status\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/query",
+            "description": "Exercises the invalid-query path documented by the `/api/query` regression tests."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('invalid query returns a handled response', function () {",
+                  "    pm.expect([400, 401, 403, 503]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
