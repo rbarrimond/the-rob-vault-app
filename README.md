@@ -40,10 +40,15 @@ This app is designed to serve as a backend tool for my custom ChatGPT assistant,
 - `function_app.py` — Main Azure Function App code
 - `vault_assistant.py` — Assistant logic for Destiny 2 data
 - `helpers.py` — Helper functions for Azure and Bungie API
+- `VaultSentinelPlatform/manifest/` — SQLite-native manifest services for blob persistence and typed queries
 - `requirements.txt` — Python dependencies
 - `local.settings.json` — Local development settings (not for production)
 - `static/openapi.yaml` — OpenAPI spec for the app
 - `static/index.html` — Static HTML tool for the app
+
+## Manifest Storage Model
+
+The Destiny manifest is now treated as Bungie’s native SQLite `.content` database. The app hydrates the current manifest locally for read-only SQLite queries and persists the raw database bytes as a versioned blob in `vault-data` for faster reuse across cold starts.
 
 ## Logging (Local vs Production)
 

@@ -53,6 +53,71 @@ else:
 app = func.FunctionApp()
 assistant = VaultAssistant()
 
+JSON_MIMETYPE = "application/json"
+INVALID_PAGINATION_MESSAGE = "Invalid limit or offset parameter."
+
+try:
+    PYODBC_ERROR = pyodbc.Error  # pylint: disable=c-extension-no-member
+except AttributeError:  # pragma: no cover
+    class PyodbcRuntimeError(Exception):
+        """Fallback pyodbc error type when the C extension cannot expose members."""
+
+    PYODBC_ERROR = PyodbcRuntimeError
+
+
+def json_http_response(
+    payload: dict | list,
+    status_code: int = 200,
+    *,
+    indent: int | None = None,
+) -> func.HttpResponse:
+    """Return a JSON response using the shared JSON mimetype constant."""
+    return func.HttpResponse(
+        json.dumps(payload, indent=indent),
+        status_code=status_code,
+        mimetype=JSON_MIMETYPE,
+    )
+
+
+def _decode_save_content(content: str | bytes, encoding: str | None) -> bytes:
+    """Decode object-save payload content into bytes based on the declared encoding."""
+    if encoding == "base64":
+        try:
+            return base64.b64decode(content)
+        except (binascii.Error, TypeError) as exc:
+            raise ValueError(f"Base64 decode failed: {exc}") from exc
+    if encoding in {"utf-8", None}:
+        return content.encode("utf-8") if isinstance(content, str) else content
+    raise ValueError(f"Unsupported encoding: {encoding}")
+
+
+def _build_save_response(
+    result: dict,
+    status: int,
+    filename: str,
+) -> tuple[dict[str, str], int]:
+    """Build the API payload returned by the object-save endpoint."""
+    if status == 200:
+        return {
+            "message": result.get("message", "Object saved successfully."),
+            "blob": result.get("blob", filename),
+            "url": result.get("url", ""),
+        }, 200
+    if status == 400:
+        return {
+            "error": result.get(
+                "error",
+                "Bad request (missing fields or invalid content)",
+            )
+        }, 400
+    return {
+        "error": result.get(
+            "error",
+            "Internal server error (failed to save object)",
+        )
+    }, 500
+
+
 _refresh_env = os.getenv("VAULT_REFRESH_INTERVAL_MINUTES")
 _default_refresh_minutes = 30
 
@@ -100,7 +165,7 @@ if _refresh_schedule:
             _, decode_status = assistant.decode_vault(include_perks=True, force_refresh=True)
             if decode_status != 200:
                 logging.warning("Timer refresh: decode_vault returned status %s", decode_status)
-        except (RuntimeError, RequestException, SQLAlchemyError, pyodbc.Error, ValueError, KeyError) as exc:  # pragma: no cover - background task best effort
+        except (RuntimeError, RequestException, SQLAlchemyError, PYODBC_ERROR, ValueError, KeyError) as exc:  # pragma: no cover - background task best effort
             logging.error("Timer refresh: Vault workflow failed: %s", exc, exc_info=True)
 
         try:
@@ -110,7 +175,7 @@ if _refresh_schedule:
             _, decode_status = assistant.decode_characters(include_perks=True, force_refresh=True)
             if decode_status != 200:
                 logging.warning("Timer refresh: decode_characters returned status %s", decode_status)
-        except (RuntimeError, RequestException, SQLAlchemyError, pyodbc.Error, ValueError, KeyError) as exc:  # pragma: no cover
+        except (RuntimeError, RequestException, SQLAlchemyError, PYODBC_ERROR, ValueError, KeyError) as exc:  # pragma: no cover
             logging.error("Timer refresh: Character workflow failed: %s", exc, exc_info=True)
 
 else:
@@ -136,11 +201,10 @@ def compress_response_if_requested(data: str, req: func.HttpRequest, status_code
         return func.HttpResponse(
             body=compressed,
             status_code=status_code,
-            mimetype="application/json",
-            headers={"Content-Encoding": "gzip"}
+            mimetype=JSON_MIMETYPE,
+            headers={"Content-Encoding": "gzip"},
         )
-    else:
-        return func.HttpResponse(data, mimetype="application/json", status_code=status_code)
+    return func.HttpResponse(data, mimetype=JSON_MIMETYPE, status_code=status_code)
 
 # ----------------------
 # Route Handler Functions
@@ -176,9 +240,9 @@ def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
                 "AZURE_STORAGE_CONNECTION_STRING": bool(os.getenv("AZURE_STORAGE_CONNECTION_STRING")),
             }
         }
-        return func.HttpResponse(json.dumps(diagnostics, indent=2), mimetype="application/json", status_code=200)
+        return json_http_response(diagnostics, status_code=200, indent=2)
     except (psutil.Error, OSError) as e:
-        return func.HttpResponse(json.dumps({"status": "error", "error": str(e)}), mimetype="application/json", status_code=500)
+        return json_http_response({"status": "error", "error": str(e)}, status_code=500)
 
 
 # --- Authentication & Session ---
@@ -254,7 +318,7 @@ def assistant_init(req: func.HttpRequest) -> func.HttpResponse:
     if not result:
         return func.HttpResponse("Failed to initialize user", status_code=status)
     logging.info("[assistant/init] Successfully initialized user.")
-    return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json")
+    return json_http_response(result, indent=2)
 
 
 @app.route(route="session", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
@@ -269,7 +333,7 @@ def get_session(req: func.HttpRequest) -> func.HttpResponse:
     """
     try:
         session_data = assistant.get_session()
-        return func.HttpResponse(json.dumps(session_data, indent=2), mimetype="application/json")
+        return json_http_response(session_data, indent=2)
     except (RuntimeError, KeyError) as e:
         logging.error("[session] Failed to get session data: %s", e)
         return func.HttpResponse("Failed to get session data.", status_code=500)
@@ -287,7 +351,7 @@ def session_token(req: func.HttpRequest) -> func.HttpResponse:
     """
     try:
         result, status_code = assistant.get_session_token()
-        return func.HttpResponse(json.dumps(result, indent=2), status_code=status_code, mimetype="application/json")
+        return json_http_response(result, status_code=status_code, indent=2)
     except (RuntimeError, KeyError) as e:
         logging.error("[session/token] Failed to get session token: %s", e)
         return func.HttpResponse("Failed to get session token.", status_code=500)
@@ -313,7 +377,7 @@ def refresh_token(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse("No refresh token found. Please re-authenticate.", status_code=403)
         token_data, _ = assistant.refresh_token(refresh_token_val)
         logging.info("[token/refresh] Successfully refreshed token.")
-        return func.HttpResponse(json.dumps({"access_token": token_data["access_token"]}), mimetype="application/json")
+        return json_http_response({"access_token": token_data["access_token"]})
     except (RuntimeError, KeyError, ValueError) as e:
         logging.error("Token refresh failed: %s", e)
         return func.HttpResponse("Failed to refresh token.", status_code=500)
@@ -339,7 +403,7 @@ def vault(req: func.HttpRequest) -> func.HttpResponse:
         limit = int(limit) if limit is not None else None
         offset = int(offset) if offset is not None else 0
     except (ValueError, TypeError):
-        return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
+        return func.HttpResponse(INVALID_PAGINATION_MESSAGE, status_code=400)
     inventory, status = assistant.get_vault()
     if inventory is None:
         logging.error(
@@ -372,7 +436,7 @@ def characters(req: func.HttpRequest) -> func.HttpResponse:
         limit = int(limit) if limit is not None else None
         offset = int(offset) if offset is not None else 0
     except (ValueError, TypeError):
-        return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
+        return func.HttpResponse(INVALID_PAGINATION_MESSAGE, status_code=400)
     equipment, status = assistant.get_characters()
     if equipment is None:
         logging.error(
@@ -418,7 +482,7 @@ def vault_decoded(req: func.HttpRequest) -> func.HttpResponse:
         limit = int(limit) if limit is not None else None
         offset = int(offset) if offset is not None else 0
     except (ValueError, TypeError):
-        return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
+        return func.HttpResponse(INVALID_PAGINATION_MESSAGE, status_code=400)
     try:
         result, status = assistant.decode_vault(
             include_perks=include_perks,
@@ -453,7 +517,7 @@ def characters_decoded(req: func.HttpRequest) -> func.HttpResponse:
         limit = int(limit) if limit is not None else None
         offset = int(offset) if offset is not None else 0
     except (ValueError, TypeError):
-        return func.HttpResponse("Invalid limit or offset parameter.", status_code=400)
+        return func.HttpResponse(INVALID_PAGINATION_MESSAGE, status_code=400)
     try:
         result, status = assistant.decode_characters(
             include_perks=include_perks,
@@ -495,7 +559,7 @@ def manifest_item(req: func.HttpRequest) -> func.HttpResponse:
         logging.error("[manifest/item] Item not found in manifest. Status: %d", status)
         return func.HttpResponse("Item not found in manifest", status_code=status)
     logging.info("[manifest/item] Successfully returned manifest item.")
-    return func.HttpResponse(json.dumps(definition_data, indent=2), mimetype="application/json")
+    return json_http_response(definition_data, indent=2)
 
 
 # --- DIM Backup and Data Management Endpoints ---
@@ -521,7 +585,7 @@ def dim_backup(req: func.HttpRequest) -> func.HttpResponse:
         result, status = assistant.save_dim_backup(
             membership_id, dim_backup_data)
         logging.info("[dim/backup] DIM backup saved successfully.")
-        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=status)
+        return json_http_response(result, status_code=status, indent=2)
     except (ValueError, KeyError, RuntimeError) as e:
         logging.error("[dim/backup] Error: %s", e)
         return func.HttpResponse("Failed to save DIM backup", status_code=500)
@@ -547,7 +611,7 @@ def dim_list(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse("No stored membership ID found.", status_code=400)
         result, _ = assistant.list_dim_backups(membership_id)
         logging.info("[dim/list] Successfully retrieved DIM backups.")
-        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json")
+        return json_http_response(result, indent=2)
     except (RuntimeError, KeyError, ValueError) as e:
         logging.error("[dim/list] Error: %s", e)
         return func.HttpResponse("Failed to list DIM backups", status_code=500)
@@ -568,13 +632,13 @@ def query_agent(req: func.HttpRequest) -> func.HttpResponse:
         query = req.get_json()
     except ValueError as e:
         logging.error("[query] Invalid JSON: %s", e)
-        return func.HttpResponse(json.dumps({"error": "Invalid JSON"}), status_code=400, mimetype="application/json")
+        return json_http_response({"error": "Invalid JSON"}, status_code=400)
     try:
         result = assistant.process_query(query)
-        return func.HttpResponse(json.dumps(result, indent=2), mimetype="application/json", status_code=200)
+        return json_http_response(result, status_code=200, indent=2)
     except (RuntimeError, ValueError, KeyError) as e:
         logging.error("[query] Agent error: %s", e)
-        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=400, mimetype="application/json")
+        return json_http_response({"error": str(e)}, status_code=400)
 
 
 @app.route(route="static/{filename}", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
@@ -600,70 +664,37 @@ def serve_static(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="save", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def save_object(req: func.HttpRequest) -> func.HttpResponse:
-
-    """
-    Save an object or file to Azure Blob Storage.
-
-    Expects a JSON POST body with:
-        - filename: Name of the file to save (string, required)
-        - content_type: MIME type of the file (string, optional)
-        - content: File content as a string or base64-encoded string (required)
-        - encoding: Encoding of the content ("base64" or "utf-8", optional)
-
-    Returns a JSON response with:
-        - message: Success message
-        - blob: Saved filename
-        - url: Blob URL
-    On error, returns a JSON response with an error message and appropriate status code.
-    """
+    """Save an object or file to Azure Blob Storage."""
     logging.info("[save] POST request received.")
     try:
         body = req.get_json()
     except ValueError:
         body = None
-    if not body:
-        return func.HttpResponse(json.dumps({"error": "Missing request body"}), status_code=400, mimetype="application/json")
 
-    # Validate required fields
+    if not body:
+        return json_http_response({"error": "Missing request body"}, status_code=400)
+
     filename = body.get("filename")
     content_type = body.get("content_type")
     content = body.get("content")
     encoding = body.get("encoding")
 
     if not filename or not content:
-        return func.HttpResponse(json.dumps({"error": "Missing filename or content in MIME object."}), status_code=400, mimetype="application/json")
+        return json_http_response(
+            {"error": "Missing filename or content in MIME object."},
+            status_code=400,
+        )
 
-    # Handle encoding
-    if encoding == "base64":
-        try:
-            content = base64.b64decode(content)
-        except (binascii.Error, TypeError, ValueError) as e:
-            return func.HttpResponse(json.dumps({"error": f"Base64 decode failed: {e}"}), status_code=400, mimetype="application/json")
-    elif encoding == "utf-8" or encoding is None:
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-    else:
-        return func.HttpResponse(json.dumps({"error": f"Unsupported encoding: {encoding}"}), status_code=400, mimetype="application/json")
+    try:
+        content_bytes = _decode_save_content(content, encoding)
+    except ValueError as exc:
+        return json_http_response({"error": str(exc)}, status_code=400)
 
-    # Create MIME-like object
     mime_obj = types.SimpleNamespace(
         filename=filename,
         content_type=content_type or "application/octet-stream",
-        content=content
+        content=content_bytes,
     )
     result, status = assistant.save_object(mime_obj)
-
-    # Format response per OpenAPI spec
-    if status == 200:
-        response = {
-            "message": result.get("message", "Object saved successfully."),
-            "blob": result.get("blob", filename),
-            "url": result.get("url", "")
-        }
-        return func.HttpResponse(json.dumps(response), status_code=200, mimetype="application/json")
-    elif status == 400:
-        response = {"error": result.get("error", "Bad request (missing fields or invalid content)")}
-        return func.HttpResponse(json.dumps(response), status_code=400, mimetype="application/json")
-    else:
-        response = {"error": result.get("error", "Internal server error (failed to save object)")}
-        return func.HttpResponse(json.dumps(response), status_code=500, mimetype="application/json")
+    response_payload, response_status = _build_save_response(result, status, filename)
+    return json_http_response(response_payload, status_code=response_status)

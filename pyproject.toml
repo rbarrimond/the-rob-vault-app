@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "the-rob-vault-app"
-version = "0.1.0"
+version = "0.2.0"
 description = "Azure Functions backend for Destiny 2 Vault Sentinel and Bungie vault automation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -40,6 +40,7 @@ addopts = "-v"
 norecursedirs = ["__pycache__"]
 
 [tool.setuptools]
+packages = ["VaultSentinelPlatform", "VaultSentinelPlatform.manifest"]
 py-modules = [
     "bungie_session_manager",
     "constants",
