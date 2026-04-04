@@ -42,6 +42,9 @@ norecursedirs = ["__pycache__"]
 [tool.pylint.format]
 max-line-length = 120
 
+[tool.pylint.typecheck]
+extension-pkg-allow-list = ["pyodbc"]
+
 [tool.setuptools]
 packages = [
     "VaultSentinelPlatform",

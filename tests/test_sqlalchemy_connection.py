@@ -1,5 +1,5 @@
 """Quick connectivity check using SQLAlchemy with the Azure SQL settings."""
-# pylint: disable=protected-access
+# pylint: disable=protected-access,c-extension-no-member
 
 import json
 import os
