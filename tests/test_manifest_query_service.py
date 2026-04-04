@@ -241,3 +241,89 @@ def test_manifest_cache_downloads_and_persists_when_blob_misses():
         ]
     finally:
         cache.close()
+
+
+def test_manifest_cache_falls_back_when_blob_cache_is_unavailable():
+    """A blob cache outage should still allow a Bungie download fallback for manifest availability."""
+    version = "2026.04.03.1200-1"
+    payload = _build_manifest_bytes()
+    events: list[tuple[str, str]] = []
+    cache = ManifestCache()
+
+    def _load(requested_version):
+        events.append(("load", requested_version))
+        raise DependencyUnavailableError("blob cache unavailable")
+
+    def _download(sqlite_path):
+        events.append(("download", sqlite_path))
+        return payload
+
+    def _save(requested_version, data):
+        assert data == payload
+        events.append(("save", requested_version))
+        return True
+
+    fake_blob_store = _FakeBlobStore(
+        manifest_index={
+            "version": version,
+            "sqlite_path": "/manifest/world_sql_content_1.zip",
+        },
+        load_manifest_bytes=_load,
+        download_manifest_bytes=_download,
+        save_manifest_bytes=_save,
+    )
+    setattr(cache, "_blob_store", fake_blob_store)
+
+    try:
+        assert cache.ensure_manifest() is True
+        assert cache.resolve_exact(SAMPLE_ITEM_HASH, "DestinyInventoryItemDefinition") is not None
+        assert events == [
+            ("load", version),
+            ("download", "/manifest/world_sql_content_1.zip"),
+            ("save", version),
+        ]
+    finally:
+        cache.close()
+
+
+def test_manifest_cache_uses_downloaded_manifest_when_blob_save_fails():
+    """A blob persistence outage should not discard a successfully downloaded manifest payload."""
+    version = "2026.04.03.1200-1"
+    payload = _build_manifest_bytes()
+    events: list[tuple[str, str]] = []
+    cache = ManifestCache()
+
+    def _load(requested_version):
+        events.append(("load", requested_version))
+        return None
+
+    def _download(sqlite_path):
+        events.append(("download", sqlite_path))
+        return payload
+
+    def _save(requested_version, data):
+        assert data == payload
+        events.append(("save", requested_version))
+        raise DependencyUnavailableError("blob save unavailable")
+
+    fake_blob_store = _FakeBlobStore(
+        manifest_index={
+            "version": version,
+            "sqlite_path": "/manifest/world_sql_content_1.zip",
+        },
+        load_manifest_bytes=_load,
+        download_manifest_bytes=_download,
+        save_manifest_bytes=_save,
+    )
+    setattr(cache, "_blob_store", fake_blob_store)
+
+    try:
+        assert cache.ensure_manifest() is True
+        assert cache.resolve_exact(SAMPLE_ITEM_HASH, "DestinyInventoryItemDefinition") is not None
+        assert events == [
+            ("load", version),
+            ("download", "/manifest/world_sql_content_1.zip"),
+            ("save", version),
+        ]
+    finally:
+        cache.close()

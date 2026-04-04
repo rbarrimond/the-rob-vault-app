@@ -24,6 +24,8 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.data.tables import TableServiceClient
 from azure.core.exceptions import ResourceExistsError, AzureError, ResourceNotFoundError
 
+from VaultSentinelPlatform.exceptions import DependencyUnavailableError
+
 def retry_request(method: Callable[..., requests.Response], url: str, **kwargs) -> requests.Response:
     """
     Perform an API request with exponential backoff retry logic.
@@ -105,6 +107,9 @@ def save_blob(
         blob_name (str): Name of the blob to create or overwrite.
         data (bytes or str): Data to upload.
         content_type (str, optional): Content type for the blob.
+
+    Raises:
+        DependencyUnavailableError: If Azure Blob Storage is unavailable.
     """
     blob_service = BlobServiceClient.from_connection_string(connection_string)
     container = blob_service.get_container_client(container_name)
@@ -112,18 +117,31 @@ def save_blob(
         container.create_container()
     except ResourceExistsError:
         logging.info("Blob container '%s' already exists.", container_name)
+    except AzureError as exc:
+        logging.error("Failed to create blob container %s: %s", container_name, exc, exc_info=True)
+        raise DependencyUnavailableError(
+            "Azure Blob Storage is unavailable while preparing blob upload.",
+            details={"container": container_name, "blob": blob_name},
+        ) from exc
 
     content_settings = (
         ContentSettings(content_type=content_type)
         if content_type is not None
         else None
     )
-    container.upload_blob(
-        blob_name,
-        data,
-        overwrite=True,
-        content_settings=content_settings,
-    )
+    try:
+        container.upload_blob(
+            blob_name,
+            data,
+            overwrite=True,
+            content_settings=content_settings,
+        )
+    except AzureError as exc:
+        logging.error("Failed to save blob %s/%s: %s", container_name, blob_name, exc, exc_info=True)
+        raise DependencyUnavailableError(
+            "Azure Blob Storage is unavailable while saving a blob.",
+            details={"container": container_name, "blob": blob_name},
+        ) from exc
     logging.info("Saved blob: %s/%s", container_name, blob_name)
 
 def load_blob(connection_string: str, container_name: str, blob_name: str) -> bytes | None:
@@ -137,6 +155,9 @@ def load_blob(connection_string: str, container_name: str, blob_name: str) -> by
 
     Returns:
         bytes or None: Blob data if found, otherwise None.
+
+    Raises:
+        DependencyUnavailableError: If Azure Blob Storage is unavailable.
     """
     blob_service = BlobServiceClient.from_connection_string(connection_string)
     container = blob_service.get_container_client(container_name)
@@ -148,9 +169,12 @@ def load_blob(connection_string: str, container_name: str, blob_name: str) -> by
     except ResourceNotFoundError:
         logging.info("Blob not found: %s/%s", container_name, blob_name)
         return None
-    except AzureError as e:
-        logging.error("Failed to load blob %s/%s: %s", container_name, blob_name, e)
-        return None
+    except AzureError as exc:
+        logging.error("Failed to load blob %s/%s: %s", container_name, blob_name, exc, exc_info=True)
+        raise DependencyUnavailableError(
+            "Azure Blob Storage is unavailable while loading a blob.",
+            details={"container": container_name, "blob": blob_name},
+        ) from exc
 
 def blob_exists(connection_string: str, container_name: str, blob_name: str) -> bool:
     """

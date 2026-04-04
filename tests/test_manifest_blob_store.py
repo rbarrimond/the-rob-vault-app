@@ -7,7 +7,11 @@ from __future__ import annotations
 import io
 import zipfile
 
+import pytest
+from azure.core.exceptions import AzureError
+
 import VaultSentinelPlatform.manifest.blob_store as blob_store_module
+from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 from VaultSentinelPlatform.manifest.blob_store import ManifestBlobStore
 
 
@@ -62,3 +66,37 @@ def test_blob_store_download_manifest_extracts_sqlite_bytes_in_memory(monkeypatc
 
     store = ManifestBlobStore(storage_connection_string="UseDevelopmentStorage=true")
     assert store.download_manifest_bytes("/path/to/world_sql_content_1.zip") == payload
+
+
+def test_blob_store_wraps_manifest_index_failures_as_dependency_errors(monkeypatch):
+    """Bungie manifest-index failures should surface as typed dependency errors with causality."""
+    outage = RuntimeError("manifest endpoint timed out")
+
+    def _raise_outage(*args, **kwargs):
+        raise outage
+
+    monkeypatch.setattr(blob_store_module, "retry_request", _raise_outage)
+
+    store = ManifestBlobStore(storage_connection_string="UseDevelopmentStorage=true")
+
+    with pytest.raises(DependencyUnavailableError, match="Failed to fetch manifest index") as exc_info:
+        store.get_manifest_index()
+
+    assert exc_info.value.__cause__ is outage
+
+
+def test_blob_store_wraps_zip_download_failures_as_dependency_errors(monkeypatch):
+    """Manifest ZIP download/extraction failures should not leak raw runtime or zipfile exceptions."""
+    outage = AzureError("blob gateway unavailable")
+
+    def _raise_outage(*args, **kwargs):
+        raise outage
+
+    monkeypatch.setattr(blob_store_module, "retry_request", _raise_outage)
+
+    store = ManifestBlobStore(storage_connection_string="UseDevelopmentStorage=true")
+
+    with pytest.raises(DependencyUnavailableError, match="Manifest ZIP download failed") as exc_info:
+        store.download_manifest_bytes("/path/to/world_sql_content_1.zip")
+
+    assert exc_info.value.__cause__ is outage

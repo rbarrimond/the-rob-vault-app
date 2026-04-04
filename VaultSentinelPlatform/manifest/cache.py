@@ -73,7 +73,16 @@ class ManifestCache:
 
     def _load_manifest_bytes(self, manifest_version: str, sqlite_path: str) -> bytes | None:
         """Load the current manifest bytes from Blob first, then Bungie if needed."""
-        cached_payload = self._blob_store.load_manifest_bytes(manifest_version)
+        try:
+            cached_payload = self._blob_store.load_manifest_bytes(manifest_version)
+        except DependencyUnavailableError as exc:
+            logging.warning(
+                "Blob manifest rehydration unavailable for version %s; falling back to Bungie download: %s",
+                manifest_version,
+                exc,
+                exc_info=True,
+            )
+            cached_payload = None
         if cached_payload is not None:
             logging.info("Rehydrated manifest version %s from Blob cache.", manifest_version)
             return cached_payload
@@ -85,7 +94,15 @@ class ManifestCache:
         downloaded_payload = self._blob_store.download_manifest_bytes(sqlite_path)
         if downloaded_payload is None:
             return None
-        self._blob_store.save_manifest_bytes(manifest_version, downloaded_payload)
+        try:
+            self._blob_store.save_manifest_bytes(manifest_version, downloaded_payload)
+        except DependencyUnavailableError as exc:
+            logging.warning(
+                "Manifest version %s downloaded successfully but could not be cached to Blob: %s",
+                manifest_version,
+                exc,
+                exc_info=True,
+            )
         return downloaded_payload
 
     def ensure_manifest(self) -> bool:
