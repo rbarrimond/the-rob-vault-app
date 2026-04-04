@@ -2,6 +2,12 @@
 
 # pylint: disable=import-error
 
+from __future__ import annotations
+
+import io
+import zipfile
+
+import VaultSentinelPlatform.manifest.blob_store as blob_store_module
 from VaultSentinelPlatform.manifest.blob_store import ManifestBlobStore
 
 
@@ -14,8 +20,8 @@ def test_blob_store_uses_versioned_manifest_names():
     )
 
 
-def test_blob_store_round_trips_sqlite_bytes(tmp_path):
-    """The blob store should persist and hydrate the raw SQLite bytes unchanged."""
+def test_blob_store_round_trips_sqlite_bytes():
+    """The blob store should persist and rehydrate the raw SQLite bytes unchanged."""
     payload = b"SQLite format 3\x00manifest-bytes"
     saved = {}
 
@@ -33,7 +39,26 @@ def test_blob_store_round_trips_sqlite_bytes(tmp_path):
     )
 
     store.save_manifest_bytes("2026.04.03.1200-1", payload)
+    assert store.load_manifest_bytes("2026.04.03.1200-1") == payload
 
-    hydrated_path = tmp_path / "manifest.content"
-    assert store.hydrate_manifest_to_path("2026.04.03.1200-1", str(hydrated_path)) is True
-    assert hydrated_path.read_bytes() == payload
+
+def test_blob_store_download_manifest_extracts_sqlite_bytes_in_memory(monkeypatch):
+    """Manifest ZIP extraction should stay in memory and return the native SQLite payload."""
+    payload = b"SQLite format 3\x00downloaded-manifest"
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        archive.writestr("world_sql_content_1.content", payload)
+
+    class _Response:
+        ok = True
+        status_code = 200
+        content = archive_bytes.getvalue()
+
+    monkeypatch.setattr(
+        blob_store_module,
+        "retry_request",
+        lambda *args, **kwargs: _Response(),
+    )
+
+    store = ManifestBlobStore(storage_connection_string="UseDevelopmentStorage=true")
+    assert store.download_manifest_bytes("/path/to/world_sql_content_1.zip") == payload

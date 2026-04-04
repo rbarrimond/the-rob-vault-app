@@ -5,7 +5,6 @@ from __future__ import annotations
 import ctypes
 import json
 import logging
-import os
 import sqlite3
 import threading
 from collections import defaultdict
@@ -17,10 +16,15 @@ from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 
 
 class ManifestSQLiteQueryService:
-    """Provide typed, memoized manifest queries against a local SQLite `.content` file."""
+    """Provide typed, memoized manifest queries against an in-memory SQLite manifest."""
 
-    def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
+    def __init__(self, manifest_bytes: bytes | bytearray | memoryview | None) -> None:
+        if isinstance(manifest_bytes, bytes):
+            self._manifest_bytes = manifest_bytes
+        elif manifest_bytes is None:
+            self._manifest_bytes = b""
+        else:
+            self._manifest_bytes = bytes(manifest_bytes)
         self._lock = threading.RLock()
         self._conn: sqlite3.Connection | None = None
         self._memo = defaultdict(dict)
@@ -28,20 +32,40 @@ class ManifestSQLiteQueryService:
         self._warned_single_get_definitions = False
 
     def _connect(self) -> sqlite3.Connection:
-        """Open the manifest SQLite database in read-only mode."""
+        """Open the manifest SQLite database from the in-memory payload."""
         with self._lock:
             if self._conn is not None:
                 return self._conn
-            if not os.path.exists(self.db_path):
+            if not self._manifest_bytes:
                 raise DependencyUnavailableError(
-                    f"Manifest DB not found at {self.db_path}",
-                    details={"db_path": self.db_path},
+                    "Manifest DB payload is not available in memory.",
+                    details={"source": "memory"},
                 )
-            self._conn = sqlite3.connect(
-                f"file:{self.db_path}?mode=ro",
-                uri=True,
-                check_same_thread=False,
-            )
+
+            connection: sqlite3.Connection | None = None
+            try:
+                connection = sqlite3.connect(":memory:", check_same_thread=False)
+                deserialize = getattr(connection, "deserialize", None)
+                if deserialize is None:
+                    raise DependencyUnavailableError(
+                        "Python sqlite3 build does not support in-memory manifest deserialization.",
+                        details={"source": "memory"},
+                    )
+                deserialize(self._manifest_bytes)
+                self._conn = connection
+            except (DependencyUnavailableError, OverflowError, sqlite3.Error, TypeError, ValueError) as exc:
+                if connection is not None:
+                    connection.close()
+                if isinstance(exc, DependencyUnavailableError):
+                    raise
+                raise DependencyUnavailableError(
+                    "Failed to initialize the in-memory manifest database.",
+                    details={
+                        "source": "memory",
+                        "payload_bytes": len(self._manifest_bytes),
+                    },
+                ) from exc
+
             try:
                 self._conn.execute("PRAGMA journal_mode=OFF;")
                 self._conn.execute("PRAGMA synchronous=OFF;")
@@ -53,7 +77,7 @@ class ManifestSQLiteQueryService:
             return self._conn
 
     def connect(self) -> sqlite3.Connection:
-        """Return the active SQLite connection through a public API."""
+        """Return the active in-memory SQLite connection through a public API."""
         return self._connect()
 
     @staticmethod

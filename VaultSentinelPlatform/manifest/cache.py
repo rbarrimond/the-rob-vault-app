@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from typing import Optional
 
@@ -15,7 +14,7 @@ from .query_service import ManifestSQLiteQueryService
 
 
 class ManifestCache:
-    """Thread-safe singleton facade for blob-backed, SQLite-native manifest access."""
+    """Thread-safe singleton facade for memory-backed, blob-rehydrated manifest access."""
 
     _instance = None
     _instance_lock = threading.RLock()
@@ -42,7 +41,7 @@ class ManifestCache:
         self.api_base = api_base
         self.headers = headers or DEFAULT_HEADERS
         self.timeout = timeout
-        self.storage_path = storage_path or "/tmp/manifest.content"
+        self.storage_path = storage_path
         self.storage_connection_string = storage_connection_string or ""
         self.version: str | None = None
         self._lock = threading.RLock()
@@ -53,48 +52,67 @@ class ManifestCache:
             headers=self.headers,
             timeout=self.timeout,
         )
+        if self.storage_path is not None:
+            logging.debug(
+                "Ignoring deprecated storage_path %s; manifest now stays in memory.",
+                self.storage_path,
+            )
 
     def __del__(self) -> None:
         self.close()
 
-    def _reinitialize_query_service(self) -> None:
-        """Recreate the internal SQLite query service after the manifest file changes."""
+    def _reinitialize_query_service(self, manifest_bytes: bytes) -> None:
+        """Recreate the internal SQLite query service from the current manifest bytes."""
         if self._query_service is not None:
             self._query_service.close()
-        self._query_service = ManifestSQLiteQueryService(self.storage_path)
+        self._query_service = ManifestSQLiteQueryService(manifest_bytes)
+
+    def _load_manifest_bytes(self, manifest_version: str, sqlite_path: str) -> bytes | None:
+        """Load the current manifest bytes from Blob first, then Bungie if needed."""
+        cached_payload = self._blob_store.load_manifest_bytes(manifest_version)
+        if cached_payload is not None:
+            logging.info("Rehydrated manifest version %s from Blob cache.", manifest_version)
+            return cached_payload
+
+        logging.info(
+            "Manifest version %s missing from Blob cache; downloading from Bungie.",
+            manifest_version,
+        )
+        downloaded_payload = self._blob_store.download_manifest_bytes(sqlite_path)
+        if downloaded_payload is None:
+            return None
+        self._blob_store.save_manifest_bytes(manifest_version, downloaded_payload)
+        return downloaded_payload
 
     def ensure_manifest(self) -> bool:
-        """Ensure the current Bungie manifest version is available locally and ready to query."""
+        """Ensure the current Bungie manifest version is loaded in memory and ready to query."""
         with self._lock:
             manifest_index = self._blob_store.get_manifest_index()
             if not manifest_index:
                 return False
 
-            manifest_version = manifest_index["version"]
+            manifest_version = str(manifest_index["version"])
             sqlite_path = manifest_index["sqlite_path"]
-            if (
-                self._query_service is not None
-                and self.version == manifest_version
-                and os.path.exists(self.storage_path)
-            ):
+            if self._query_service is not None and self.version == manifest_version:
                 return True
 
-            hydrated = self._blob_store.hydrate_manifest_to_path(
-                manifest_version,
-                self.storage_path,
-            )
-            if not hydrated:
-                hydrated = self._blob_store.download_and_persist_manifest(
+            manifest_bytes = self._load_manifest_bytes(manifest_version, sqlite_path)
+            if manifest_bytes is None:
+                logging.error("Failed to load manifest version %s.", manifest_version)
+                return False
+
+            try:
+                self._reinitialize_query_service(manifest_bytes)
+            except DependencyUnavailableError as exc:
+                logging.error(
+                    "Failed to initialize manifest version %s in memory: %s",
                     manifest_version,
-                    sqlite_path,
-                    self.storage_path,
+                    exc,
+                    exc_info=True,
                 )
-            if not hydrated:
-                logging.error("Failed to hydrate manifest version %s.", manifest_version)
                 return False
 
             self.version = manifest_version
-            self._reinitialize_query_service()
             return True
 
     def _get_query_service(self) -> ManifestSQLiteQueryService:
@@ -102,7 +120,7 @@ class ManifestCache:
         if self._query_service is None and not self.ensure_manifest():
             raise DependencyUnavailableError(
                 "Manifest is not available for querying.",
-                details={"storage_path": self.storage_path},
+                details={"source": "memory", "manifest_version": self.version},
             )
         assert self._query_service is not None
         return self._query_service
@@ -163,13 +181,9 @@ class ManifestCache:
         )
 
     def close(self) -> None:
-        """Close the query service and delete the hydrated local manifest copy."""
+        """Close the in-memory query service and reset the cached manifest version."""
         with self._lock:
             if self._query_service is not None:
                 self._query_service.close()
                 self._query_service = None
-            if os.path.exists(self.storage_path):
-                try:
-                    os.remove(self.storage_path)
-                except OSError as exc:
-                    logging.warning("Failed to delete manifest DB file: %s", exc)
+            self.version = None

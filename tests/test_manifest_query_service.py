@@ -2,6 +2,8 @@
 
 # pylint: disable=import-error
 
+from __future__ import annotations
+
 import json
 import sqlite3
 
@@ -16,8 +18,23 @@ SAMPLE_ITEM_HASH = 123456
 SAMPLE_STAT_HASH = 987654
 
 
-def _build_manifest_db(db_path):
-    conn = sqlite3.connect(db_path)
+class _FakeBlobStore:
+    def __init__(
+        self,
+        *,
+        manifest_index,
+        load_manifest_bytes,
+        download_manifest_bytes,
+        save_manifest_bytes,
+    ) -> None:
+        self.get_manifest_index = lambda: manifest_index
+        self.load_manifest_bytes = load_manifest_bytes
+        self.download_manifest_bytes = download_manifest_bytes
+        self.save_manifest_bytes = save_manifest_bytes
+
+
+def _build_manifest_bytes() -> bytes:
+    conn = sqlite3.connect(":memory:")
     try:
         conn.execute(
             "CREATE TABLE DestinyInventoryItemDefinition "
@@ -54,16 +71,14 @@ def _build_manifest_db(db_path):
             ),
         )
         conn.commit()
+        return conn.serialize()
     finally:
         conn.close()
 
 
-def test_query_service_resolves_exact_many_and_cross_type(tmp_path):
+def test_query_service_resolves_exact_many_and_cross_type():
     """The query service should preserve exact, batched, and cross-type manifest lookups."""
-    db_path = tmp_path / "manifest.content"
-    _build_manifest_db(db_path)
-
-    service = ManifestSQLiteQueryService(str(db_path))
+    service = ManifestSQLiteQueryService(_build_manifest_bytes())
     try:
         item_def = service.resolve_exact(SAMPLE_ITEM_HASH, "DestinyInventoryItemDefinition")
         assert item_def is not None
@@ -87,12 +102,9 @@ def test_query_service_resolves_exact_many_and_cross_type(tmp_path):
         service.close()
 
 
-def test_query_service_supports_name_search(tmp_path):
+def test_query_service_supports_name_search():
     """The new semantic query layer should support typed name search within a manifest table."""
-    db_path = tmp_path / "manifest.content"
-    _build_manifest_db(db_path)
-
-    service = ManifestSQLiteQueryService(str(db_path))
+    service = ManifestSQLiteQueryService(_build_manifest_bytes())
     try:
         results = service.search_definitions_by_name("DestinyInventoryItemDefinition", "midnight")
         assert len(results) == 1
@@ -101,20 +113,94 @@ def test_query_service_supports_name_search(tmp_path):
         service.close()
 
 
-def test_query_service_raises_business_exception_when_manifest_db_missing(tmp_path):
-    """Missing manifest files should surface as platform dependency errors."""
-    missing_path = tmp_path / "missing.content"
-    service = ManifestSQLiteQueryService(str(missing_path))
+def test_query_service_raises_business_exception_when_manifest_bytes_missing():
+    """Missing in-memory manifest payloads should surface as platform dependency errors."""
+    service = ManifestSQLiteQueryService(b"")
 
-    with pytest.raises(DependencyUnavailableError, match="Manifest DB not found"):
+    with pytest.raises(DependencyUnavailableError, match="Manifest DB payload is not available"):
         service.connect()
 
 
-def test_manifest_cache_raises_business_exception_when_manifest_unavailable(tmp_path):
+def test_manifest_cache_raises_business_exception_when_manifest_unavailable():
     """Manifest cache availability failures should remain within the platform exception hierarchy."""
-    cache = ManifestCache(storage_path=str(tmp_path / "manifest.content"))
+    cache = ManifestCache()
 
     cache.ensure_manifest = lambda: False
 
     with pytest.raises(DependencyUnavailableError, match="Manifest is not available"):
         cache.prewarm_small_tables()
+
+
+def test_manifest_cache_prefers_blob_rehydration_before_bungie_download():
+    """Cold starts should rehydrate the current manifest from Blob before considering Bungie download."""
+    version = "2026.04.03.1200-1"
+    payload = _build_manifest_bytes()
+    events: list[tuple[str, str]] = []
+    cache = ManifestCache()
+    fake_blob_store = _FakeBlobStore(
+        manifest_index={
+            "version": version,
+            "sqlite_path": "/manifest/world_sql_content_1.zip",
+        },
+        load_manifest_bytes=lambda requested_version: (
+            events.append(("load", requested_version)) or payload
+        ),
+        download_manifest_bytes=lambda sqlite_path: (
+            events.append(("download", sqlite_path)) or None
+        ),
+        save_manifest_bytes=lambda requested_version, data: (
+            events.append(("save", requested_version)) or True
+        ),
+    )
+    setattr(cache, "_blob_store", fake_blob_store)
+
+    try:
+        assert cache.ensure_manifest() is True
+        assert cache.resolve_exact(SAMPLE_ITEM_HASH, "DestinyInventoryItemDefinition") is not None
+        assert events == [("load", version)]
+    finally:
+        cache.close()
+
+
+def test_manifest_cache_downloads_and_persists_when_blob_misses():
+    """If the current version is absent from Blob storage, the cache should fetch from Bungie and persist it."""
+    version = "2026.04.03.1200-1"
+    payload = _build_manifest_bytes()
+    events: list[tuple[str, str]] = []
+    cache = ManifestCache()
+
+    def _load(requested_version):
+        events.append(("load", requested_version))
+        return None
+
+    def _download(sqlite_path):
+        events.append(("download", sqlite_path))
+        return payload
+
+    def _save(requested_version, data):
+        assert data == payload
+        events.append(("save", requested_version))
+        return True
+
+    fake_blob_store = _FakeBlobStore(
+        manifest_index={
+            "version": version,
+            "sqlite_path": "/manifest/world_sql_content_1.zip",
+        },
+        load_manifest_bytes=_load,
+        download_manifest_bytes=_download,
+        save_manifest_bytes=_save,
+    )
+    setattr(cache, "_blob_store", fake_blob_store)
+
+    try:
+        assert cache.ensure_manifest() is True
+        item_def = cache.resolve_exact(SAMPLE_ITEM_HASH, "DestinyInventoryItemDefinition")
+        assert item_def is not None
+        assert events == [
+            ("load", version),
+            ("download", "/manifest/world_sql_content_1.zip"),
+            ("save", version),
+        ]
+    finally:
+        cache.close()

@@ -49,7 +49,7 @@ This app is designed to serve as a backend tool for my custom ChatGPT assistant,
 
 ## Manifest Storage Model
 
-The Destiny manifest is now treated as Bungie’s native SQLite `.content` database. The app hydrates the current manifest locally for read-only SQLite queries and persists the raw database bytes as a versioned blob in `vault-data` for faster reuse across cold starts.
+The Destiny manifest remains Bungie’s native SQLite `.content` database. The app checks Bungie for the current manifest version, rehydrates that version from the `vault-data` Blob cache directly into memory when available, and only redownloads from Bungie when the version is new or missing from Blob. The versioned blob exists to maximize cold-start rehydration speed without depending on a local filesystem copy.
 
 ## Logging (Local vs Production)
 

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+import io
 import logging
-import os
-import tempfile
 import zipfile
 from typing import Callable, Optional
 
@@ -16,7 +15,7 @@ from helpers import load_blob, retry_request, save_blob
 
 
 class ManifestBlobStore:
-    """Persist and hydrate Bungie's native `.content` manifest as a versioned blob."""
+    """Persist and rehydrate Bungie's native `.content` manifest as a versioned blob."""
 
     def __init__(
         self,
@@ -97,19 +96,8 @@ class ManifestBlobStore:
         logging.info("Saved manifest SQLite blob for version %s.", version)
         return True
 
-    def hydrate_manifest_to_path(self, version: str, local_path: str) -> bool:
-        """Hydrate the specified versioned manifest blob to a readable local SQLite file."""
-        payload = self.load_manifest_bytes(version)
-        if payload is None:
-            return False
-        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-        with open(local_path, "wb") as handle:
-            handle.write(payload)
-        logging.info("Hydrated manifest version %s to %s.", version, local_path)
-        return True
-
     def download_manifest_bytes(self, sqlite_path: str) -> bytes | None:
-        """Download and extract the raw `.content` SQLite bytes from Bungie."""
+        """Download and extract the raw `.content` SQLite bytes from Bungie in memory."""
         download_url = (
             sqlite_path
             if sqlite_path.startswith("http")
@@ -125,12 +113,8 @@ class ManifestBlobStore:
             logging.error("Manifest ZIP download failed: %d", response.status_code)
             return None
 
-        zip_path: str | None = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False, mode="wb") as temp_file:
-                temp_file.write(response.content)
-                zip_path = temp_file.name
-            with zipfile.ZipFile(zip_path, "r") as archive:
+            with zipfile.ZipFile(io.BytesIO(response.content), "r") as archive:
                 manifest_members = [
                     info
                     for info in archive.infolist()
@@ -144,23 +128,16 @@ class ManifestBlobStore:
         except (OSError, zipfile.BadZipFile) as exc:
             logging.error("Failed to extract manifest ZIP: %s", exc)
             return None
-        finally:
-            if zip_path and os.path.exists(zip_path):
-                os.remove(zip_path)
 
     def download_and_persist_manifest(
         self,
         version: str,
         sqlite_path: str,
-        local_path: str,
-    ) -> bool:
-        """Download the manifest from Bungie and persist it locally and in blob storage."""
+    ) -> bytes | None:
+        """Download the manifest from Bungie and persist its bytes to Blob storage."""
         payload = self.download_manifest_bytes(sqlite_path)
         if payload is None:
-            return False
-        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-        with open(local_path, "wb") as handle:
-            handle.write(payload)
+            return None
         self.save_manifest_bytes(version, payload)
-        logging.info("Downloaded and hydrated manifest version %s.", version)
-        return True
+        logging.info("Downloaded manifest version %s from Bungie.", version)
+        return payload
