@@ -39,6 +39,9 @@ python_files = ["test_*.py"]
 addopts = "-v"
 norecursedirs = ["__pycache__"]
 
+[tool.pylint.format]
+max-line-length = 120
+
 [tool.setuptools]
 packages = ["VaultSentinelPlatform", "VaultSentinelPlatform.manifest"]
 py-modules = [
