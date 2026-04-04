@@ -13,6 +13,7 @@ from typing import Any, Optional, Sequence
 
 from constants import BUNGIE_REQUIRED_DEFS
 from helpers import normalize_item_hash
+from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 
 
 class ManifestSQLiteQueryService:
@@ -32,7 +33,10 @@ class ManifestSQLiteQueryService:
             if self._conn is not None:
                 return self._conn
             if not os.path.exists(self.db_path):
-                raise FileNotFoundError(f"Manifest DB not found at {self.db_path}")
+                raise DependencyUnavailableError(
+                    f"Manifest DB not found at {self.db_path}",
+                    details={"db_path": self.db_path},
+                )
             self._conn = sqlite3.connect(
                 f"file:{self.db_path}?mode=ro",
                 uri=True,

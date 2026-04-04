@@ -9,6 +9,7 @@ from typing import Optional
 
 from constants import (BUNGIE_API_BASE, DEFAULT_HEADERS, REQUEST_TIMEOUT,
                        STORAGE_CONNECTION_STRING)
+from VaultSentinelPlatform.exceptions import DependencyUnavailableError
 from .blob_store import ManifestBlobStore
 from .query_service import ManifestSQLiteQueryService
 
@@ -99,7 +100,10 @@ class ManifestCache:
     def _get_query_service(self) -> ManifestSQLiteQueryService:
         """Return the initialized query service, ensuring the manifest is ready first."""
         if self._query_service is None and not self.ensure_manifest():
-            raise RuntimeError("Manifest is not available for querying.")
+            raise DependencyUnavailableError(
+                "Manifest is not available for querying.",
+                details={"storage_path": self.storage_path},
+            )
         assert self._query_service is not None
         return self._query_service
 

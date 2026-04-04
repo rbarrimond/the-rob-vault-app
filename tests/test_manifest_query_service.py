@@ -5,6 +5,10 @@
 import json
 import sqlite3
 
+import pytest
+
+from VaultSentinelPlatform.exceptions import DependencyUnavailableError
+from VaultSentinelPlatform.manifest.cache import ManifestCache
 from VaultSentinelPlatform.manifest.query_service import ManifestSQLiteQueryService
 
 
@@ -95,3 +99,22 @@ def test_query_service_supports_name_search(tmp_path):
         assert results[0]["displayProperties"]["name"] == "Midnight Coup"
     finally:
         service.close()
+
+
+def test_query_service_raises_business_exception_when_manifest_db_missing(tmp_path):
+    """Missing manifest files should surface as platform dependency errors."""
+    missing_path = tmp_path / "missing.content"
+    service = ManifestSQLiteQueryService(str(missing_path))
+
+    with pytest.raises(DependencyUnavailableError, match="Manifest DB not found"):
+        service.connect()
+
+
+def test_manifest_cache_raises_business_exception_when_manifest_unavailable(tmp_path):
+    """Manifest cache availability failures should remain within the platform exception hierarchy."""
+    cache = ManifestCache(storage_path=str(tmp_path / "manifest.content"))
+
+    cache.ensure_manifest = lambda: False
+
+    with pytest.raises(DependencyUnavailableError, match="Manifest is not available"):
+        cache.prewarm_small_tables()
