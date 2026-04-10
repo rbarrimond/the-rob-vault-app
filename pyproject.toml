@@ -44,17 +44,6 @@ max-line-length = 120
 [tool.pylint.typecheck]
 extension-pkg-allow-list = ["pyodbc"]
 
-[tool.setuptools]
-packages = [
-    "VaultSentinelPlatform",
-    "VaultSentinelPlatform.agent",
-    "VaultSentinelPlatform.api",
-    "VaultSentinelPlatform.bungie",
-    "VaultSentinelPlatform.common",
-    "VaultSentinelPlatform.manifest",
-    "VaultSentinelPlatform.vault",
-]
-py-modules = [
-    "function_app",
-    "manifest_cache",
-]
+[tool.setuptools.packages.find]
+include = ["VaultSentinelPlatform*"]
+exclude = ["tests*", "htmlcov*"]
