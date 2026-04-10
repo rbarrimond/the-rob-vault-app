@@ -76,8 +76,7 @@ local.settings.json
 bin/
 obj/
 # VS Code Azure Functions extension settings
-
-.python_packages
+# Keep `.python_packages` in the deployment artifact for deterministic CI-built publishes.
 
 # Node modules (if using any JavaScript/TypeScript)
 node_modules/
