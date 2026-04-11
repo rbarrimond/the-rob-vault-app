@@ -1,4 +1,4 @@
-"""Backward-compatible manifest cache facade built on the new platform services."""
+"""Thread-safe manifest cache facade built on the platform manifest services."""
 
 from __future__ import annotations
 
@@ -39,13 +39,11 @@ class ManifestCache:
         api_base: str = BUNGIE_API_BASE,
         headers: Optional[dict] = None,
         timeout: int = REQUEST_TIMEOUT,
-        storage_path: str | None = None,
         storage_connection_string: str | None = STORAGE_CONNECTION_STRING,
     ) -> None:
         self.api_base = api_base
         self.headers = headers or DEFAULT_HEADERS
         self.timeout = timeout
-        self.storage_path = storage_path
         self.storage_connection_string = storage_connection_string or ""
         self.version: str | None = None
         self._lock = threading.RLock()
@@ -56,11 +54,6 @@ class ManifestCache:
             headers=self.headers,
             timeout=self.timeout,
         )
-        if self.storage_path is not None:
-            logging.debug(
-                "Ignoring deprecated storage_path %s; manifest now stays in memory.",
-                self.storage_path,
-            )
 
     def __del__(self) -> None:
         self.close()
@@ -146,10 +139,6 @@ class ManifestCache:
         assert self._query_service is not None
         return self._query_service
 
-    def _connect(self):
-        """Compatibility helper returning the underlying SQLite connection."""
-        return self._get_query_service().connect()
-
     def prewarm_small_tables(self) -> None:
         """Preload small definition tables into memory for faster lookups."""
         self._get_query_service().prewarm_small_tables()
@@ -173,14 +162,6 @@ class ManifestCache:
     def get_all_definitions(self, definition_type: str) -> dict[str, dict]:
         """Return all definitions for the specified table."""
         return self._get_query_service().get_all_definitions(definition_type)
-
-    def get_definitions(
-        self,
-        definition_type: str,
-        item_hash: str | int | None = None,
-    ) -> dict | None:
-        """Compatibility method retained for existing callers."""
-        return self._get_query_service().get_definitions(definition_type, item_hash=item_hash)
 
     def resolve_manifest_hash(self, item_hash: int | str, definition_types: Optional[list[str]] = None):
         """Resolve a hash across one or more manifest definition tables."""

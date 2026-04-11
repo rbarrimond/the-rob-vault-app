@@ -29,7 +29,6 @@ class ManifestSQLiteQueryService:
         self._conn: sqlite3.Connection | None = None
         self._memo = defaultdict(dict)
         self._small_defs: dict[str, dict[str, dict]] = {}
-        self._warned_single_get_definitions = False
 
     @staticmethod
     def _raise_manifest_dependency_error(
@@ -286,18 +285,6 @@ class ManifestSQLiteQueryService:
                     definition_type=definition_type,
                 )
         return definitions
-
-    def get_definitions(self, definition_type: str, item_hash: str | int | None = None) -> dict | None:
-        """Compatibility method retained for callers that still use the old API."""
-        if item_hash is not None:
-            if not self._warned_single_get_definitions:
-                logging.warning(
-                    "get_definitions(single) is deprecated; use resolve_exact for %s",
-                    definition_type,
-                )
-                self._warned_single_get_definitions = True
-            return self.resolve_exact(item_hash, definition_type)
-        return self.get_all_definitions(definition_type)
 
     def resolve_manifest_hash(
         self,
