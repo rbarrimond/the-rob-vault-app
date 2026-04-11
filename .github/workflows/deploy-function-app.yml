@@ -12,44 +12,111 @@ env:
   PACKAGE_PATH: '.'
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
 
     steps:
       - name: 'Checkout code'
         uses: actions/checkout@v4
 
-      # Python setup is needed for both CI validation and building the deployable artifact.
-      # Dependencies are packaged in CI so Azure receives a deterministic publish payload.
       - name: 'Setup Python ${{ env.PYTHON_VERSION }}'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: 'Build deployment dependencies'
+      # Install all deps (prod + dev) for test execution only.
+      # These NEVER reach the deploy artifact — tests run on a separate runner.
+      - name: 'Install all dependencies for testing'
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+
+      - name: 'Run tests'
+        run: python -m pytest tests/ -v
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v4
+
+      - name: 'Setup Python ${{ env.PYTHON_VERSION }}'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Build the deploy artifact: production deps only, no dev packages.
+      - name: 'Build production deploy artifact'
         run: |
           python -m pip install --upgrade pip
           rm -rf .python_packages
           mkdir -p .python_packages/lib/site-packages
           pip install -r requirements.txt --target ".python_packages/lib/site-packages"
 
-      - name: 'Install app and test dependencies'
-        run: pip install ".[dev]"
-
-      - name: 'Validate Azure Function imports'
+      # Validate imports against .python_packages — the exact path Azure uses.
+      # This catches missing packages before deploy, not after cold start.
+      - name: 'Validate deploy artifact imports'
         run: |
           python - <<'PY'
+          import sys, os
+          # Simulate Azure's sys.path: .python_packages first, no runner site-packages
+          sys.path.insert(0, os.path.abspath(".python_packages/lib/site-packages"))
+          sys.path.insert(1, os.path.abspath("."))
+
           import function_app
           from VaultSentinelPlatform.agent.db_agent import VaultSentinelDBAgent
           from VaultSentinelPlatform.manifest.cache import ManifestCache
+          from VaultSentinelPlatform.manifest.identity import race_name_to_hash
 
-          print("✅ Azure Function import smoke check passed")
+          print("✅ Deploy artifact import smoke check passed")
           print(function_app.app)
           print(VaultSentinelDBAgent.__name__, ManifestCache.__name__)
           PY
 
-      - name: 'Run tests'
-        run: python -m pytest tests/ -v
+      # Wipe wwwroot before deploy so stale files from prior deployments don't accumulate.
+      # Required because WEBSITE_RUN_FROM_PACKAGE=0 extracts the zip into wwwroot in-place
+      # without first removing files that no longer exist in the new package.
+      - name: 'Clean stale wwwroot artifacts via Kudu'
+        env:
+          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+        run: |
+          python - <<'PY'
+          import os, re, base64, urllib.request, json
+
+          profile = os.environ["PUBLISH_PROFILE"]
+
+          # Parse Kudu credentials from the MSDeploy publish profile entry
+          url_match  = re.search(r'publishUrl="([^"]*\.scm\.azurewebsites\.net[^"]*)"', profile)
+          user_match = re.search(r'userName="(\$[^"]+)"', profile)
+          pwd_match  = re.search(r'userPWD="([^"]+)"', profile)
+
+          if not (url_match and user_match and pwd_match):
+              raise RuntimeError("Could not parse Kudu credentials from publish profile")
+
+          scm_host = url_match.group(1).split(":")[0]   # strip port if present
+          username = user_match.group(1)
+          password = pwd_match.group(1)
+
+          creds   = base64.b64encode(f"{username}:{password}".encode()).decode()
+          headers = {"Authorization": f"Basic {creds}", "Content-Type": "application/json"}
+
+          payload = json.dumps({"command": "rm -rf /home/site/wwwroot/*", "dir": "/"}).encode()
+          req = urllib.request.Request(
+              f"https://{scm_host}/api/command",
+              data=payload, headers=headers, method="POST",
+          )
+          with urllib.request.urlopen(req) as resp:
+              result = json.loads(resp.read())
+
+          if result.get("ExitCode", 0) != 0:
+              raise RuntimeError(f"Kudu wwwroot clean failed: {result.get('Error', '').strip()}")
+
+          print("✅ wwwroot cleaned — stale artifacts removed")
+          if result.get("Output"):
+              print(result["Output"].strip())
+          PY
 
       - name: 'Deploy to Azure Functions'
         uses: Azure/functions-action@v1
@@ -61,7 +128,7 @@ jobs:
           scm-do-build-during-deployment: false
           enable-oryx-build: false
 
-      - name: 'Deployment summary'
+      - name: 'Deploy summary'
         run: |
           echo "✅ Deployment completed successfully"
           echo "📦 Package deployed to ${{ env.AZURE_FUNCTIONAPP_NAME }}"
