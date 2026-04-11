@@ -29,7 +29,6 @@ __tablestorage__/
 azurite_db*.
 
 # Local overrides and environment files
-requirements.local
 local.settings.json
 .env
 .env.*
