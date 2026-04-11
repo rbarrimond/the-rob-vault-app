@@ -24,6 +24,18 @@ def make_request(payload: dict) -> func.HttpRequest:
     )
 
 
+def make_health_request() -> func.HttpRequest:
+    """Build a lightweight GET request for the health endpoint."""
+    return func.HttpRequest(
+        method="GET",
+        url="http://localhost/api/health",
+        headers={},
+        params={},
+        route_params={},
+        body=b"",
+    )
+
+
 def test_query_agent_maps_dependency_unavailable_to_503() -> None:
     """Dependency failures should reach `@endpoint()` and become HTTP 503 responses."""
     with patch.object(
@@ -52,3 +64,18 @@ def test_query_agent_maps_query_validation_error_to_400() -> None:
     assert json.loads(response.get_body().decode("utf-8")) == {
         "error": "Missing required key: filters"
     }
+
+
+def test_healthcheck_returns_standard_library_diagnostics() -> None:
+    """Health endpoint should return 200 with process and environment diagnostics."""
+    response = function_app.healthcheck(make_health_request())
+
+    assert response.status_code == 200
+    payload = json.loads(response.get_body().decode("utf-8"))
+    assert payload["status"] == "ok"
+    assert isinstance(payload["cpu_count"], (int, type(None)))
+    assert payload["process"]["pid"] > 0
+    assert payload["process"]["uptime_seconds"] >= 0
+    assert "python_version" in payload
+    assert "platform" in payload
+    assert "env" in payload

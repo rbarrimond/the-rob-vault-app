@@ -17,10 +17,10 @@ import logging
 import os
 import platform
 import sys
+import time
 import types
 
 import azure.functions as func
-import psutil
 from requests.exceptions import RequestException
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -58,6 +58,7 @@ else:
 
 app = func.FunctionApp()
 assistant = VaultAssistant()
+_PROCESS_START_TIME = time.time()
 
 _refresh_schedule, _refresh_interval_minutes = compute_refresh_schedule(
     os.getenv("VAULT_REFRESH_INTERVAL_MINUTES")
@@ -111,34 +112,29 @@ else:
 def healthcheck(req: func.HttpRequest) -> func.HttpResponse:
     """
     Health check endpoint for Azure monitoring.
-    Returns process diagnostics including Python version, platform, CPU, memory, and key environment variables.
+    Returns process diagnostics using standard-library-only runtime metadata.
 
     Args:
         req (func.HttpRequest): The HTTP request object.
     Returns:
         func.HttpResponse: JSON response with diagnostics or error.
     """
-    try:
-        process = psutil.Process()
-        mem_info = process.memory_info()
-        diagnostics = {
-            "status": "ok",
-            "python_version": sys.version,
-            "platform": platform.platform(),
-            "cpu_count": psutil.cpu_count(),
-            "memory": {
-                "rss": mem_info.rss,  # Resident Set Size in bytes
-                "vms": mem_info.vms,  # Virtual Memory Size in bytes
-            },
-            "env": {
-                "LOG_LEVEL": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
-                "BUNGIE_API_KEY": bool(os.getenv("BUNGIE_API_KEY")),
-                "AZURE_STORAGE_CONNECTION_STRING": bool(os.getenv("AZURE_STORAGE_CONNECTION_STRING")),
-            }
+    diagnostics = {
+        "status": "ok",
+        "python_version": sys.version,
+        "platform": platform.platform(),
+        "process": {
+            "pid": os.getpid(),
+            "uptime_seconds": round(time.time() - _PROCESS_START_TIME, 3),
+        },
+        "cpu_count": os.cpu_count(),
+        "env": {
+            "LOG_LEVEL": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
+            "BUNGIE_API_KEY": bool(os.getenv("BUNGIE_API_KEY")),
+            "AZURE_STORAGE_CONNECTION_STRING": bool(os.getenv("AZURE_STORAGE_CONNECTION_STRING")),
         }
-        return json_http_response(diagnostics, status_code=200, indent=2)
-    except (psutil.Error, OSError) as e:
-        return json_http_response({"status": "error", "error": str(e)}, status_code=500)
+    }
+    return json_http_response(diagnostics, status_code=200, indent=2)
 
 
 # --- Authentication & Session ---
