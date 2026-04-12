@@ -17,6 +17,7 @@ import logging
 import os
 import platform
 import sys
+import threading
 import time
 import types
 
@@ -57,7 +58,28 @@ else:
     logging.getLogger().setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO))
 
 app = func.FunctionApp()
-assistant = VaultAssistant()
+
+_assistant_state: dict[str, VaultAssistant | None] = {"instance": None}
+_assistant_lock = threading.Lock()
+
+
+def _get_assistant() -> VaultAssistant:
+    """Create the assistant on first use so import-time checks stay side-effect free."""
+    if _assistant_state["instance"] is None:
+        with _assistant_lock:
+            if _assistant_state["instance"] is None:
+                _assistant_state["instance"] = VaultAssistant()
+    return _assistant_state["instance"]
+
+
+class _AssistantProxy:
+    """Lazily proxy VaultAssistant method access without changing endpoint call sites."""
+
+    def __getattr__(self, name: str):
+        return getattr(_get_assistant(), name)
+
+
+assistant = _AssistantProxy()
 _PROCESS_START_TIME = time.time()
 
 _refresh_schedule, _refresh_interval_minutes = compute_refresh_schedule(
