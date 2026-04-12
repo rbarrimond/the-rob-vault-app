@@ -6,6 +6,10 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 env:
   PYTHON_VERSION: '3.13'
   AZURE_FUNCTIONAPP_NAME: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
@@ -37,6 +41,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: test
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      HAS_OIDC: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' }}
+      HAS_PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE != '' }}
 
     steps:
       - name: 'Checkout code'
@@ -55,24 +65,26 @@ jobs:
           mkdir -p .python_packages/lib/site-packages
           pip install -r requirements.txt --target ".python_packages/lib/site-packages"
 
-      # Validate imports against .python_packages — the exact path Azure uses.
-      # This catches missing packages before deploy, not after cold start.
+      # Validate dependency imports against .python_packages and compile the entrypoint.
+      # Avoid importing function_app here because module import triggers runtime startup wiring.
       - name: 'Validate deploy artifact imports'
         run: |
           python - <<'PY'
           import sys, os
+          import py_compile
           # Simulate Azure's sys.path: .python_packages first, no runner site-packages
           sys.path.insert(0, os.path.abspath(".python_packages/lib/site-packages"))
           sys.path.insert(1, os.path.abspath("."))
 
-          import function_app
+          py_compile.compile("function_app.py", doraise=True)
+
           from VaultSentinelPlatform.agent.db_agent import VaultSentinelDBAgent
           from VaultSentinelPlatform.manifest.cache import ManifestCache
           from VaultSentinelPlatform.manifest.identity import race_name_to_hash
+          from VaultSentinelPlatform.api.http_utils import json_http_response
 
           print("✅ Deploy artifact import smoke check passed")
-          print(function_app.app)
-          print(VaultSentinelDBAgent.__name__, ManifestCache.__name__)
+          print(VaultSentinelDBAgent.__name__, ManifestCache.__name__, race_name_to_hash.__name__, json_http_response.__name__)
           PY
 
       # Create a minimal, deterministic deployment payload.
@@ -88,7 +100,44 @@ jobs:
           echo "✅ Curated package contents:"
           find .deploy -mindepth 1 -maxdepth 2 | sort
 
-      - name: 'Deploy to Azure Functions'
+      - name: 'Validate deployment authentication configuration'
+        run: |
+          if [[ -z "${AZURE_FUNCTIONAPP_NAME}" ]]; then
+            echo "❌ Missing AZURE_FUNCTIONAPP_NAME secret."
+            exit 1
+          fi
+
+          if [[ "${HAS_OIDC}" != "true" && "${HAS_PUBLISH_PROFILE}" != "true" ]]; then
+            echo "❌ Missing deployment auth. Configure OIDC (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID) or AZURE_FUNCTIONAPP_PUBLISH_PROFILE."
+            exit 1
+          fi
+
+      - name: 'Azure login (OIDC)'
+        if: env.HAS_OIDC == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: 'Verify Function App target exists (OIDC)'
+        if: env.HAS_OIDC == 'true'
+        run: |
+          az functionapp show --name "${AZURE_FUNCTIONAPP_NAME}" --query name -o tsv >/dev/null
+          echo "✅ Verified deploy target exists: ${AZURE_FUNCTIONAPP_NAME}"
+
+      - name: 'Deploy to Azure Functions (OIDC)'
+        if: env.HAS_OIDC == 'true'
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          package: ${{ env.PACKAGE_PATH }}
+          respect-funcignore: true
+          scm-do-build-during-deployment: false
+          enable-oryx-build: false
+
+      - name: 'Deploy to Azure Functions (Publish Profile fallback)'
+        if: env.HAS_OIDC != 'true'
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
@@ -102,4 +151,9 @@ jobs:
         run: |
           echo "✅ Deployment completed successfully"
           echo "📦 Package deployed to ${{ env.AZURE_FUNCTIONAPP_NAME }}"
+          if [[ "${HAS_OIDC}" == "true" ]]; then
+            echo "🔐 Auth mode: OIDC"
+          else
+            echo "🔐 Auth mode: Publish Profile (fallback)"
+          fi
 
