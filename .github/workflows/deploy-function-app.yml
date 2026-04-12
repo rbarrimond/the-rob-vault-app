@@ -102,7 +102,10 @@ jobs:
           creds   = base64.b64encode(f"{username}:{password}".encode()).decode()
           headers = {"Authorization": f"Basic {creds}", "Content-Type": "application/json"}
 
-          payload = json.dumps({"command": "rm -rf /home/site/wwwroot/*", "dir": "/"}).encode()
+          payload = json.dumps({
+              "command": "find /home/site/wwwroot -mindepth 1 -delete",
+              "dir": "/",
+          }).encode()
           req = urllib.request.Request(
               f"https://{scm_host}/api/command",
               data=payload, headers=headers, method="POST",
@@ -112,6 +115,24 @@ jobs:
 
           if result.get("ExitCode", 0) != 0:
               raise RuntimeError(f"Kudu wwwroot clean failed: {result.get('Error', '').strip()}")
+
+          verify_payload = json.dumps({
+              "command": "find /home/site/wwwroot -mindepth 1 -maxdepth 1 -print",
+              "dir": "/",
+          }).encode()
+          verify_req = urllib.request.Request(
+              f"https://{scm_host}/api/command",
+              data=verify_payload, headers=headers, method="POST",
+          )
+          with urllib.request.urlopen(verify_req) as resp:
+              verify = json.loads(resp.read())
+
+          if verify.get("ExitCode", 0) != 0:
+              raise RuntimeError(f"Kudu wwwroot verification failed: {verify.get('Error', '').strip()}")
+
+          leftovers = [line.strip() for line in verify.get("Output", "").splitlines() if line.strip()]
+          if leftovers:
+              raise RuntimeError(f"Kudu wwwroot not empty after clean: {', '.join(leftovers)}")
 
           print("✅ wwwroot cleaned — stale artifacts removed")
           if result.get("Output"):
