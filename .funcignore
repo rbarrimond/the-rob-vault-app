@@ -56,13 +56,21 @@ build/
 # Local dev overrides and secrets
 local.settings.json
 tokens.json
-*.pem
 *.key
 *.env
 .env
 .env.*
 .env.local
 .env.*.local
+
+# Keep local certificate-like secrets out of deployment payload,
+# while allowing runtime CA bundles under .python_packages.
+/*.pem
+/*.crt
+/*.cer
+!/.python_packages/**/*.pem
+!/.python_packages/**/*.crt
+!/.python_packages/**/*.cer
 
 # Azurite local emulator state
 .azurite/
@@ -100,7 +108,3 @@ yarn-error.log*
 
 # Local development
 *.local
-
-# Explicitly keep runtime package content that must be deployed.
-!VaultSentinelPlatform/manifest/
-!VaultSentinelPlatform/manifest/**
