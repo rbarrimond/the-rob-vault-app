@@ -103,7 +103,7 @@ jobs:
           headers = {"Authorization": f"Basic {creds}", "Content-Type": "application/json"}
 
           payload = json.dumps({
-              "command": "rm -rf /home/site/wwwroot/* /home/site/wwwroot/.[!.]* /home/site/wwwroot/..?*",
+              "command": "find /home/site/wwwroot -mindepth 1 -maxdepth 1 ! -name .python_packages -exec rm -rf {} +",
               "dir": "/",
           }).encode()
           req = urllib.request.Request(
